@@ -23,11 +23,25 @@ dist/
 build/
 .vite/
 
-# Data & model artefacts (never commit raw personal data or binaries)
+# Data & model artefacts (never commit raw personal data or binaries).
+# Ignore everything under data/ by default, then explicitly allow only the
+# canonical subfolder structure — this way a dataset dropped in under any
+# folder name (e.g. data/home_credit/, data/german_credit/) is ignored
+# automatically, with no per-dataset .gitignore update needed.
+data/*
+!data/raw
+!data/processed
+!data/benchmarks
+!data/synthetic
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/benchmarks/*
+!data/benchmarks/.gitkeep
+data/synthetic/*
+!data/synthetic/.gitkeep
+
 model_artifacts/*
 !model_artifacts/.gitkeep
 
