@@ -1,4 +1,5 @@
 from app.extensions import db
+from app.models.decision import Decision
 from app.models.model import Model, ModelVersion
 from app.models.tenant import Tenant
 
@@ -87,6 +88,102 @@ def test_audit_event_is_recorded_and_verifiable(client, app):
     verify_body = verify_response.get_json()
     assert verify_body["valid"] is True
     assert verify_body["integrity_check_id"]
+
+
+def test_score_missing_application_reference_is_rejected(client, app):
+    tenant, _ = _create_tenant_and_model()
+
+    response = client.post(
+        "/api/v1/score",
+        json={"features": {"income": 0.5}},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert response.status_code == 400
+    assert "application_reference" in response.get_json()["error"]
+
+
+def test_score_empty_features_is_rejected(client, app):
+    tenant, _ = _create_tenant_and_model()
+
+    response = client.post(
+        "/api/v1/score",
+        json={"application_reference": "APP-4", "features": {}},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert response.status_code == 400
+    assert "features" in response.get_json()["error"]
+
+
+def test_score_unsupported_feature_type_is_rejected(client, app):
+    tenant, _ = _create_tenant_and_model()
+
+    response = client.post(
+        "/api/v1/score",
+        json={"application_reference": "APP-5", "features": {"income": {"nested": "object"}}},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert response.status_code == 400
+    assert "income" in response.get_json()["error"]
+
+
+def test_score_unknown_model_version_is_rejected(client, app):
+    tenant, _ = _create_tenant_and_model()
+
+    response = client.post(
+        "/api/v1/score",
+        json={
+            "application_reference": "APP-6",
+            "features": {"income": 0.5},
+            "model_version_id": "00000000-0000-0000-0000-000000000000",
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert response.status_code == 404
+
+
+def test_score_non_deployed_model_version_is_rejected(client, app):
+    tenant, deployed_version = _create_tenant_and_model()
+
+    draft_version = ModelVersion(
+        model_id=deployed_version.model_id,
+        version="0.1.0-draft",
+        status="draft",
+        artifact_uri="file://./model_artifacts/credit-risk-0.1.0-draft.pkl",
+    )
+    db.session.add(draft_version)
+    db.session.commit()
+
+    response = client.post(
+        "/api/v1/score",
+        json={
+            "application_reference": "APP-7",
+            "features": {"income": 0.5},
+            "model_version_id": draft_version.id,
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert response.status_code == 409
+
+
+def test_score_replays_idempotently_by_request_id(client, app):
+    tenant, _ = _create_tenant_and_model()
+
+    payload = {
+        "application_reference": "APP-8",
+        "features": {"income": 0.5},
+        "request_id": "client-key-123",
+    }
+
+    first = client.post("/api/v1/score", json=payload, headers={"X-Tenant-Id": tenant.id})
+    assert first.status_code == 201
+    first_decision_id = first.get_json()["decision"]["id"]
+
+    second = client.post("/api/v1/score", json=payload, headers={"X-Tenant-Id": tenant.id})
+    assert second.status_code == 200
+    assert second.get_json()["decision"]["id"] == first_decision_id
+
+    # Only one decision and one audit event were actually created.
+    assert Decision.query.filter_by(tenant_id=tenant.id).count() == 1
 
 
 def test_deploying_a_model_version_supersedes_the_previous_deployment(client, app):
