@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from app.extensions import db
 from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
@@ -22,6 +22,49 @@ def list_models():
             for m in models
         ]
     )
+
+
+@bp.post("/models")
+def register_model_version():
+    """Registers a model version, creating the parent logical Model
+    (identified by tenant + name) on first use. New versions always start
+    as "draft" — approval and deployment are separate, deliberate steps
+    (see deploy_model below); nothing here can put a version live."""
+    try:
+        tenant = resolve_tenant()
+    except TenantResolutionError as exc:
+        return jsonify(error=exc.message), exc.status_code
+
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    version = body.get("version")
+    artifact_uri = body.get("artifact_uri")
+    metrics = body.get("metrics")
+
+    if not all([name, version, artifact_uri]):
+        return jsonify(error="name, version, and artifact_uri are required"), 400
+    if metrics is not None and not isinstance(metrics, dict):
+        return jsonify(error="metrics must be an object if provided"), 400
+
+    model = Model.query.filter_by(tenant_id=tenant.id, name=name).first()
+    if model is None:
+        model = Model(tenant_id=tenant.id, name=name)
+        db.session.add(model)
+        db.session.flush()
+    elif ModelVersion.query.filter_by(model_id=model.id, version=version).first() is not None:
+        return jsonify(error="This model version is already registered"), 409
+
+    model_version = ModelVersion(
+        model_id=model.id,
+        version=version,
+        status="draft",
+        artifact_uri=artifact_uri,
+        metrics=metrics,
+    )
+    db.session.add(model_version)
+    db.session.commit()
+
+    return jsonify(model=model.to_dict(), model_version=model_version.to_dict()), 201
 
 
 @bp.post("/models/<model_id>/deploy")

@@ -4,10 +4,12 @@ request and maps the typed exceptions below to status codes — this module
 owns the actual business workflow (ERD Phase 3: "route coordinates the
 request; service owns the workflow").
 
-Prediction/explanation are delegated to an injected `ModelRuntime` (ERD
-Phase 4) — this service depends only on that interface and is unaware of
-the concrete model type. It defaults to `PlaceholderRuntime` until a real
-trained-model adapter exists.
+Prediction/explanation are delegated to a `ModelRuntime` (ERD Phase 4) —
+this service depends only on that interface and is unaware of the
+concrete model type. Unless a runtime is explicitly passed in (tests
+only), it is resolved per model version via `runtime_resolver` — which
+falls back to `PlaceholderRuntime` for any model version not backed by a
+real trained artifact.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from app.models.model import ModelVersion
 from app.models.tenant import Tenant
 from app.services import audit_service
 from app.services.model_runtime import ModelRuntime
-from app.services.placeholder_runtime import PlaceholderRuntime
+from app.services.runtime_resolver import resolve_runtime
 
 _MAX_FEATURES = 200
 
@@ -60,7 +62,9 @@ class ScoringResult:
 class ScoringService:
     def __init__(self, session=None, runtime: ModelRuntime | None = None):
         self.session = session or db.session
-        self.runtime = runtime or PlaceholderRuntime()
+        # Explicit override — used by tests to inject a fake runtime.
+        # None means "resolve per model version" (the normal path).
+        self._runtime_override = runtime
 
     def score(
         self,
@@ -81,9 +85,10 @@ class ScoringService:
         model_version = self._resolve_model_version(tenant, model_version_id)
 
         try:
-            prediction = self.runtime.predict(features)
+            runtime = self._runtime_override or resolve_runtime(model_version)
+            prediction = runtime.predict(features)
             outcome = self._decide_outcome(prediction.score)
-            explanation_result = self.runtime.explain(features, prediction)
+            explanation_result = runtime.explain(features, prediction)
         except ScoringRuntimeError:
             raise
         except Exception:

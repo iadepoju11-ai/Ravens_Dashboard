@@ -56,6 +56,10 @@ services:
       - "5000:5000"
     volumes:
       - ./apps/api:/app
+      # Trained model artifacts (apps/workers/ml output) — gitignored,
+      # local dev only. Real deployments use an artefact store, not a
+      # bind-mounted directory.
+      - ./model_artifacts:/app/model_artifacts
 
   web:
     build:

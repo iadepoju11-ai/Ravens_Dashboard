@@ -1,0 +1,115 @@
+"""Covers registering a model version via the API, and — where the real
+trained artifact is available (`make ml-train`) — a full end-to-end
+register -> approve -> deploy -> score chain against it, proving the real
+ModelRuntime adapter is actually reachable through the live API, not just
+unit-tested in isolation.
+"""
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from app.extensions import db
+from app.models.model import ModelVersion
+from app.models.tenant import Tenant
+
+ARTIFACT_PATH = os.environ.get("CREDIT_RISK_V1_ARTIFACT_PATH", "/app/model_artifacts/credit-risk-v1.joblib")
+METADATA_PATH = os.environ.get(
+    "CREDIT_RISK_V1_METADATA_PATH", "/app/model_artifacts/credit-risk-v1-metadata.json"
+)
+REAL_ARTIFACT_AVAILABLE = Path(ARTIFACT_PATH).exists()
+
+
+def _create_tenant(slug: str) -> Tenant:
+    tenant = Tenant(name=slug, slug=slug)
+    db.session.add(tenant)
+    db.session.commit()
+    return tenant
+
+
+def test_register_model_version_creates_a_draft(client, app):
+    tenant = _create_tenant("model-registration-bank")
+
+    response = client.post(
+        "/api/v1/models",
+        json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["model_version"]["status"] == "draft"
+    assert body["model"]["name"] == "credit-risk"
+
+
+def test_registering_the_same_model_version_twice_is_rejected(client, app):
+    tenant = _create_tenant("model-registration-dup-bank")
+    payload = {"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"}
+
+    first = client.post("/api/v1/models", json=payload, headers={"X-Tenant-Id": tenant.id})
+    assert first.status_code == 201
+
+    second = client.post("/api/v1/models", json=payload, headers={"X-Tenant-Id": tenant.id})
+    assert second.status_code == 409
+
+
+def test_register_model_version_requires_name_version_and_artifact_uri(client, app):
+    tenant = _create_tenant("model-registration-validation-bank")
+
+    response = client.post(
+        "/api/v1/models",
+        json={"name": "credit-risk"},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.skipif(
+    not REAL_ARTIFACT_AVAILABLE,
+    reason=f"real trained artifact not found at {ARTIFACT_PATH} — run `make ml-train` first",
+)
+def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(client, app):
+    tenant = _create_tenant("real-model-bank")
+    metadata = json.loads(Path(METADATA_PATH).read_text())
+
+    register_response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "credit-risk",
+            "version": "1.0.0-dev",
+            "artifact_uri": f"file://{ARTIFACT_PATH}",
+            "metrics": {"features": metadata["features"]},
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert register_response.status_code == 201
+    model_version_id = register_response.get_json()["model_version"]["id"]
+
+    # No "approve" endpoint exists yet (documented gap in CHECKLIST.md) —
+    # set directly for this test.
+    model_version = db.session.get(ModelVersion, model_version_id)
+    model_version.status = "approved"
+    db.session.commit()
+
+    deploy_response = client.post(
+        f"/api/v1/models/{model_version_id}/deploy", headers={"X-Tenant-Id": tenant.id}
+    )
+    assert deploy_response.status_code == 200
+
+    score_response = client.post(
+        "/api/v1/score",
+        json={
+            "application_reference": "APP-REAL-MODEL-1",
+            "features": {"AMT_INCOME_TOTAL": 150000, "AMT_CREDIT": 500000, "NAME_CONTRACT_TYPE": "Cash loans"},
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+
+    assert score_response.status_code == 201
+    body = score_response.get_json()
+    assert 0.0 <= body["decision"]["score"] <= 1.0
+    assert body["explanation"]["method"] == "shap-tree"
+    assert len(body["explanation"]["feature_attributions"]) > 0
