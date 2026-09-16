@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: creditguard
+      POSTGRES_PASSWORD: creditguard
+      POSTGRES_DB: creditguard
+    ports:
+      # Host port 5433 (not the default 5432) so this stack can run
+      # alongside other local Postgres instances without colliding.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creditguard -d creditguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Internal container-to-container traffic still uses the default
+      # 9092; only the host-side mapping below is remapped to 9093.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      # Host port 9093 (not the default 9092) to avoid colliding with
+      # another local Kafka broker.
+      - "9093:9092"
+
+  api:
+    build:
+      context: ./apps/api
+    env_file: .env
+    environment:
+      # Container-to-container networking always uses the service name and
+      # the *internal* port, regardless of the host-side port mapping above.
+      DATABASE_URL: postgresql://creditguard:creditguard@postgres:5432/creditguard
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./apps/api:/app
+
+  web:
+    build:
+      context: ./apps/web
+    env_file: .env
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app
+
+volumes:
+  postgres_data:
