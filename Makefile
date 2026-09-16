@@ -1,4 +1,4 @@
-.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test lint
+.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train lint
 
 up:
 	docker compose up --build
@@ -32,6 +32,24 @@ web-run:
 web-test:
 	cd apps/web && npm test
 
+ml-build:
+	docker build -t creditguard-ml-workers ./apps/workers
+
+# Override HOME_CREDIT_DATA_DIR to point at wherever the Home Credit CSVs
+# actually live, e.g.:
+#   make ml-train HOME_CREDIT_DATA_DIR=/c/path/to/home_credit
+HOME_CREDIT_DATA_DIR ?= $(CURDIR)/data/home_credit
+
+ml-test: ml-build
+	docker run --rm creditguard-ml-workers python -m pytest tests/ -v
+
+ml-train: ml-build
+	docker run --rm \
+		-v "$(HOME_CREDIT_DATA_DIR):/workers/data/home_credit:ro" \
+		-v "$(CURDIR)/model_artifacts:/workers/model_artifacts" \
+		creditguard-ml-workers
+
 lint:
 	cd apps/api && ruff check app
+	cd apps/workers && ruff check ml tests
 	cd apps/web && npm run lint
