@@ -4,8 +4,10 @@ request and maps the typed exceptions below to status codes — this module
 owns the actual business workflow (ERD Phase 3: "route coordinates the
 request; service owns the workflow").
 
-`_predict` / `_explain` are placeholders standing in for the real model
-runtime (ERD Phase 4's `ModelRuntime` protocol) until it lands.
+Prediction/explanation are delegated to an injected `ModelRuntime` (ERD
+Phase 4) — this service depends only on that interface and is unaware of
+the concrete model type. It defaults to `PlaceholderRuntime` until a real
+trained-model adapter exists.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from app.models.explanation import Explanation
 from app.models.model import ModelVersion
 from app.models.tenant import Tenant
 from app.services import audit_service
+from app.services.model_runtime import ModelRuntime
+from app.services.placeholder_runtime import PlaceholderRuntime
 
 _MAX_FEATURES = 200
 
@@ -54,8 +58,9 @@ class ScoringResult:
 
 
 class ScoringService:
-    def __init__(self, session=None):
+    def __init__(self, session=None, runtime: ModelRuntime | None = None):
         self.session = session or db.session
+        self.runtime = runtime or PlaceholderRuntime()
 
     def score(
         self,
@@ -76,9 +81,9 @@ class ScoringService:
         model_version = self._resolve_model_version(tenant, model_version_id)
 
         try:
-            risk_score = self._predict(features)
-            outcome = self._decide_outcome(risk_score)
-            base_value, attributions = self._explain(features, risk_score)
+            prediction = self.runtime.predict(features)
+            outcome = self._decide_outcome(prediction.score)
+            explanation_result = self.runtime.explain(features, prediction)
         except ScoringRuntimeError:
             raise
         except Exception:
@@ -95,7 +100,7 @@ class ScoringService:
             application_reference=application_reference,
             request_id=request_id,
             input_payload=features,
-            score=risk_score,
+            score=prediction.score,
             outcome=outcome,
         )
         self.session.add(decision)
@@ -103,9 +108,9 @@ class ScoringService:
 
         explanation = Explanation(
             decision_id=decision.id,
-            method="stub-shap",
-            base_value=base_value,
-            feature_attributions=attributions,
+            method=explanation_result.method,
+            base_value=explanation_result.base_value,
+            feature_attributions={c.feature_name: c.value for c in explanation_result.contributions},
         )
         self.session.add(explanation)
 
@@ -114,7 +119,7 @@ class ScoringService:
             event_type="decision.created",
             entity_type="decision",
             entity_id=decision.id,
-            payload={"score": risk_score, "outcome": outcome, "model_version_id": model_version.id},
+            payload={"score": prediction.score, "outcome": outcome, "model_version_id": model_version.id},
         )
 
         self.session.commit()
@@ -165,27 +170,9 @@ class ScoringService:
             raise ScoringValidationError("No deployed model available for this tenant", status_code=409)
         return model_version
 
-    def _predict(self, features: dict) -> float:
-        numeric_values = [v for v in features.values() if isinstance(v, (int, float)) and not isinstance(v, bool)]
-        if not numeric_values:
-            return 0.5
-        raw = sum(numeric_values) / len(numeric_values)
-        return max(0.0, min(1.0, raw))
-
     def _decide_outcome(self, risk_score: float) -> str:
         if risk_score < 0.33:
             return "approve"
         if risk_score < 0.66:
             return "refer"
         return "decline"
-
-    def _explain(self, features: dict, risk_score: float) -> tuple[float, dict]:
-        numeric_features = {
-            k: v for k, v in features.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
-        }
-        base_value = 0.5
-        if not numeric_features:
-            return base_value, {}
-        delta = risk_score - base_value
-        share = delta / len(numeric_features)
-        return base_value, {name: share for name in numeric_features}
