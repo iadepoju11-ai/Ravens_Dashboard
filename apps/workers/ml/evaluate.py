@@ -6,9 +6,13 @@ figure, and subgroup performance.
 Drift and out-of-time stability are deliberately NOT computed here: drift
 needs a previously-deployed baseline to compare against (none exists yet
 for this first reference model), and out-of-time stability needs a
-genuine calendar date field that application_train.csv doesn't have (see
-config.py). Both are reported as explicit "not applicable" rather than
-silently omitted or faked.
+genuine calendar date field neither Home Credit's application_train.csv
+nor German Credit has. Both are reported as explicit "not applicable"
+rather than silently omitted or faked.
+
+Dataset-agnostic (target_column/protected_attribute_column are
+parameters) so the same function serves both the Home Credit pipeline and
+the German Credit benchmark comparison.
 """
 
 from __future__ import annotations
@@ -24,8 +28,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from ml.config import PROTECTED_ATTRIBUTE_COLUMN, TARGET_COLUMN
-
 DECISION_THRESHOLD = 0.5
 # An explicit, configurable, illustrative cost assumption — not a
 # validated business cost model. A false negative (predicted repay,
@@ -35,9 +37,16 @@ COST_FALSE_NEGATIVE = 10.0
 COST_FALSE_POSITIVE = 1.0
 
 
-def evaluate(pipeline, eval_df, numeric_columns, categorical_columns) -> dict:
+def evaluate(
+    pipeline,
+    eval_df,
+    numeric_columns,
+    categorical_columns,
+    target_column: str,
+    protected_attribute_column: str | None = None,
+) -> dict:
     X = eval_df[numeric_columns + categorical_columns]
-    y_true = eval_df[TARGET_COLUMN].to_numpy()
+    y_true = eval_df[target_column].to_numpy()
     y_score = pipeline.predict_proba(X)[:, 1]
     y_pred = (y_score >= DECISION_THRESHOLD).astype(int)
 
@@ -74,15 +83,15 @@ def evaluate(pipeline, eval_df, numeric_columns, categorical_columns) -> dict:
         "out_of_time_stability": "not_applicable_no_calendar_date_field_in_application_train",
     }
 
-    if PROTECTED_ATTRIBUTE_COLUMN in eval_df.columns:
-        metrics["subgroup_performance"] = _subgroup_performance(eval_df, y_true, y_score)
+    if protected_attribute_column and protected_attribute_column in eval_df.columns:
+        metrics["subgroup_performance"] = _subgroup_performance(eval_df, y_true, y_score, protected_attribute_column)
 
     return metrics
 
 
-def _subgroup_performance(eval_df, y_true, y_score) -> dict:
+def _subgroup_performance(eval_df, y_true, y_score, protected_attribute_column: str) -> dict:
     subgroup_metrics = {}
-    groups = eval_df[PROTECTED_ATTRIBUTE_COLUMN].to_numpy()
+    groups = eval_df[protected_attribute_column].to_numpy()
     for group in np.unique(groups):
         mask = groups == group
         if mask.sum() < 30:

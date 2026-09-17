@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 
 from ml import config
-from ml.data import feature_columns, load_application_train, split
+from ml.data import feature_columns, load_csv, stratified_split
 from ml.evaluate import evaluate
 from ml.explain import run_shap_fidelity_check
 from ml.train import save_pipeline, train_logistic_regression, train_xgboost
@@ -22,21 +22,42 @@ from ml.train import save_pipeline, train_logistic_regression, train_xgboost
 def main() -> None:
     config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
-    df = load_application_train()
-    train_df, val_df, holdout_df = split(df)
-    numeric_columns, categorical_columns = feature_columns(df)
+    df = load_csv(config.APPLICATION_TRAIN_PATH)
+    train_df, val_df, holdout_df = stratified_split(
+        df,
+        config.TARGET_COLUMN,
+        config.TRAIN_FRACTION,
+        config.VALIDATION_FRACTION,
+        config.HOLDOUT_FRACTION,
+        config.RANDOM_SEED,
+    )
+    excluded = {config.ID_COLUMN, config.TARGET_COLUMN, config.PROTECTED_ATTRIBUTE_COLUMN}
+    numeric_columns, categorical_columns = feature_columns(df, excluded)
 
     print(
         f"train={len(train_df)} val={len(val_df)} holdout={len(holdout_df)} "
         f"numeric_features={len(numeric_columns)} categorical_features={len(categorical_columns)}"
     )
 
-    logistic_pipeline = train_logistic_regression(train_df, numeric_columns, categorical_columns)
-    xgboost_pipeline = train_xgboost(train_df, numeric_columns, categorical_columns)
+    logistic_pipeline = train_logistic_regression(
+        train_df, numeric_columns, categorical_columns, config.TARGET_COLUMN, config.RANDOM_SEED
+    )
+    xgboost_pipeline = train_xgboost(
+        train_df, numeric_columns, categorical_columns, config.TARGET_COLUMN, config.RANDOM_SEED
+    )
 
-    logistic_val_metrics = evaluate(logistic_pipeline, val_df, numeric_columns, categorical_columns)
-    xgboost_val_metrics = evaluate(xgboost_pipeline, val_df, numeric_columns, categorical_columns)
-    xgboost_holdout_metrics = evaluate(xgboost_pipeline, holdout_df, numeric_columns, categorical_columns)
+    logistic_val_metrics = evaluate(
+        logistic_pipeline, val_df, numeric_columns, categorical_columns,
+        config.TARGET_COLUMN, config.PROTECTED_ATTRIBUTE_COLUMN,
+    )
+    xgboost_val_metrics = evaluate(
+        xgboost_pipeline, val_df, numeric_columns, categorical_columns,
+        config.TARGET_COLUMN, config.PROTECTED_ATTRIBUTE_COLUMN,
+    )
+    xgboost_holdout_metrics = evaluate(
+        xgboost_pipeline, holdout_df, numeric_columns, categorical_columns,
+        config.TARGET_COLUMN, config.PROTECTED_ATTRIBUTE_COLUMN,
+    )
 
     shap_sample = holdout_df.sample(n=min(500, len(holdout_df)), random_state=config.RANDOM_SEED)
     shap_check = run_shap_fidelity_check(xgboost_pipeline, shap_sample, numeric_columns, categorical_columns)
@@ -49,6 +70,7 @@ def main() -> None:
         "model_version": "1.0.0-dev",
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "algorithm": "xgboost.XGBClassifier (comparison winner over logistic regression baseline)",
+        "explainer": "shap-tree",
         "dataset": {
             "name": "home-credit-application",
             "version": "kaggle-home-credit-default-risk",
