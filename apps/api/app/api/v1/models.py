@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from app.extensions import db
 from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.models.dataset import DatasetVersion
 from app.models.deployment import ModelDeployment
 from app.models.model import Model, ModelVersion
 
@@ -40,11 +41,17 @@ def register_model_version():
     version = body.get("version")
     artifact_uri = body.get("artifact_uri")
     metrics = body.get("metrics")
+    training_dataset_version_id = body.get("training_dataset_version_id")
 
     if not all([name, version, artifact_uri]):
         return jsonify(error="name, version, and artifact_uri are required"), 400
     if metrics is not None and not isinstance(metrics, dict):
         return jsonify(error="metrics must be an object if provided"), 400
+
+    if training_dataset_version_id:
+        dataset_version = DatasetVersion.query.filter_by(id=training_dataset_version_id).first()
+        if dataset_version is None or dataset_version.dataset.tenant_id != tenant.id:
+            return jsonify(error="Unknown training_dataset_version_id for this tenant"), 404
 
     model = Model.query.filter_by(tenant_id=tenant.id, name=name).first()
     if model is None:
@@ -60,11 +67,39 @@ def register_model_version():
         status="draft",
         artifact_uri=artifact_uri,
         metrics=metrics,
+        training_dataset_version_id=training_dataset_version_id or None,
     )
     db.session.add(model_version)
     db.session.commit()
 
     return jsonify(model=model.to_dict(), model_version=model_version.to_dict()), 201
+
+
+@bp.post("/models/<model_id>/approve")
+def approve_model_version(model_id: str):
+    """Approve a draft model version. `model_id` names a ModelVersion id.
+
+    No reviewer identity is recorded yet — ModelVersion.approved_by is a
+    foreign key to users.id, and there is no authenticated user to
+    attribute this to until the OIDC/RBAC workstream (auth.py) lands.
+    """
+    try:
+        tenant = resolve_tenant()
+    except TenantResolutionError as exc:
+        return jsonify(error=exc.message), exc.status_code
+
+    model_version = ModelVersion.query.filter_by(id=model_id).first()
+    if model_version is None or model_version.model.tenant_id != tenant.id:
+        return jsonify(error="not_found"), 404
+
+    if model_version.status != "draft":
+        return jsonify(error="Only draft model versions can be approved"), 409
+
+    model_version.status = "approved"
+    model_version.approved_at = db.func.now()
+    db.session.commit()
+
+    return jsonify(model_version=model_version.to_dict())
 
 
 @bp.post("/models/<model_id>/deploy")

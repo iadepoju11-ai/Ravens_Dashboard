@@ -1,8 +1,8 @@
-"""Covers registering a model version via the API, and — where the real
-trained artifact is available (`make ml-train`) — a full end-to-end
-register -> approve -> deploy -> score chain against it, proving the real
-ModelRuntime adapter is actually reachable through the live API, not just
-unit-tested in isolation.
+"""Covers registering a model version via the API, approving it, and —
+where the real trained artifact is available (`make ml-train`) — a full
+end-to-end register -> link dataset version -> approve -> deploy -> score
+chain against it, proving the real ModelRuntime adapter is actually
+reachable through the live API, not just unit-tested in isolation.
 """
 
 import json
@@ -67,6 +67,92 @@ def test_register_model_version_requires_name_version_and_artifact_uri(client, a
     assert response.status_code == 400
 
 
+def test_register_model_version_rejects_unknown_training_dataset_version(client, app):
+    tenant = _create_tenant("model-registration-unknown-dataset-bank")
+
+    response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "credit-risk",
+            "version": "1.0.0-dev",
+            "artifact_uri": "file://./does-not-matter.pkl",
+            "training_dataset_version_id": "00000000-0000-0000-0000-000000000000",
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+
+    assert response.status_code == 404
+
+
+def test_register_model_version_links_a_real_dataset_version(client, app):
+    tenant = _create_tenant("model-registration-dataset-link-bank")
+
+    dataset_response = client.post(
+        "/api/v1/datasets",
+        json={"name": "home-credit-application", "version": "kaggle-home-credit-default-risk", "uri": "s3://x"},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert dataset_response.status_code == 201
+    dataset_version_id = dataset_response.get_json()["version"]["id"]
+
+    model_response = client.post(
+        "/api/v1/models",
+        json={
+            "name": "credit-risk",
+            "version": "1.0.0-dev",
+            "artifact_uri": "file://./does-not-matter.pkl",
+            "training_dataset_version_id": dataset_version_id,
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert model_response.status_code == 201
+
+
+def test_approve_draft_model_version(client, app):
+    tenant = _create_tenant("model-approval-bank")
+    register_response = client.post(
+        "/api/v1/models",
+        json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    model_version_id = register_response.get_json()["model_version"]["id"]
+
+    response = client.post(
+        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["model_version"]["status"] == "approved"
+
+
+def test_approving_an_already_approved_version_is_rejected(client, app):
+    tenant = _create_tenant("model-approval-dup-bank")
+    register_response = client.post(
+        "/api/v1/models",
+        json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    model_version_id = register_response.get_json()["model_version"]["id"]
+    client.post(f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id})
+
+    response = client.post(
+        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
+    )
+
+    assert response.status_code == 409
+
+
+def test_approving_an_unknown_model_version_is_rejected(client, app):
+    tenant = _create_tenant("model-approval-unknown-bank")
+
+    response = client.post(
+        "/api/v1/models/00000000-0000-0000-0000-000000000000/approve",
+        headers={"X-Tenant-Id": tenant.id},
+    )
+
+    assert response.status_code == 404
+
+
 @pytest.mark.skipif(
     not REAL_ARTIFACT_AVAILABLE,
     reason=f"real trained artifact not found at {ARTIFACT_PATH} — run `make ml-train` first",
@@ -75,6 +161,19 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
     tenant = _create_tenant("real-model-bank")
     metadata = json.loads(Path(METADATA_PATH).read_text())
 
+    dataset_response = client.post(
+        "/api/v1/datasets",
+        json={
+            "name": metadata["dataset"]["name"],
+            "version": metadata["dataset"]["version"],
+            "uri": metadata["dataset"]["source_file"],
+            "row_count": metadata["dataset"]["n_rows"],
+        },
+        headers={"X-Tenant-Id": tenant.id},
+    )
+    assert dataset_response.status_code == 201
+    dataset_version_id = dataset_response.get_json()["version"]["id"]
+
     register_response = client.post(
         "/api/v1/models",
         json={
@@ -82,17 +181,18 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
             "version": "1.0.0-dev",
             "artifact_uri": f"file://{ARTIFACT_PATH}",
             "metrics": {"features": metadata["features"]},
+            "training_dataset_version_id": dataset_version_id,
         },
         headers={"X-Tenant-Id": tenant.id},
     )
     assert register_response.status_code == 201
     model_version_id = register_response.get_json()["model_version"]["id"]
+    assert register_response.get_json()["model_version"]["id"] == model_version_id
 
-    # No "approve" endpoint exists yet (documented gap in CHECKLIST.md) —
-    # set directly for this test.
-    model_version = db.session.get(ModelVersion, model_version_id)
-    model_version.status = "approved"
-    db.session.commit()
+    approve_response = client.post(
+        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
+    )
+    assert approve_response.status_code == 200
 
     deploy_response = client.post(
         f"/api/v1/models/{model_version_id}/deploy", headers={"X-Tenant-Id": tenant.id}
@@ -113,3 +213,7 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
     assert 0.0 <= body["decision"]["score"] <= 1.0
     assert body["explanation"]["method"] == "shap-tree"
     assert len(body["explanation"]["feature_attributions"]) > 0
+
+    # The trained-on dataset version is traceable from the deployed model.
+    model_version = db.session.get(ModelVersion, model_version_id)
+    assert model_version.training_dataset_version_id == dataset_version_id

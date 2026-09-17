@@ -1,15 +1,22 @@
 # Model card: credit-risk v1.0.0-dev
 
 Status: **development reference model** — trained and validated as
-`CHECKLIST.md` Phase 4's "first reference model milestone". Not yet wired
-into the live `/score` endpoint (which still uses `PlaceholderRuntime`);
-see "What's not done yet" below.
+`CHECKLIST.md` Phase 4's "first reference model milestone", and (2026-09-17)
+wired into the live API end to end: `apps/api/app/services/runtimes/sklearn_pipeline_runtime.py`
+loads this exact artifact, and `tests/integration/test_model_registration.py::test_score_against_the_real_deployed_model_uses_shap_tree_explanations`
+registers it via `POST /api/v1/models`, links it to a registered
+`DatasetVersion`, approves it via `POST /api/v1/models/<id>/approve`,
+deploys it via `POST /api/v1/models/<id>/deploy`, and confirms `/score`
+returns real `shap-tree` explanations. See "What's not done yet" for what
+that end-to-end path still doesn't cover.
 
 Trained: 2026-09-16. Reproducible via `apps/workers/ml/pipeline.py`
 (`docker build -t creditguard-ml-workers ./apps/workers && docker run --rm
 -v <path-to-home_credit-csvs>:/workers/data/home_credit:ro -v
 ./model_artifacts:/workers/model_artifacts creditguard-ml-workers`),
-`random_seed=42`.
+`random_seed=42`. See `docs/model_cards/german-credit-benchmark.md` for
+the comparison run `data-strategy.md` calls for (German Credit, not a
+candidate model in its own right).
 
 ---
 
@@ -68,11 +75,11 @@ This confirms the SHAP explanations are faithful to what the model actually comp
 
 ## What's not done yet
 
-- **Not wired into the live API.** `ScoringService` still defaults to `PlaceholderRuntime` (`apps/api/app/services/placeholder_runtime.py`). Wiring this artifact in requires a concrete `ModelRuntime` adapter and a way to resolve which runtime a given `ModelVersion` should use — an open architecture question noted in `CHECKLIST.md` Phase 4 (in-process import from `apps/workers/ml` vs. a fully decoupled artifact-loading adapter inside `apps/api`).
-- **Not registered as a `Model`/`ModelVersion` row** in the platform database — there's also currently no API endpoint to create one (only list + deploy exist). Deferred until a specific tenant needs this model deployed.
 - **No drift or out-of-time stability metrics** — both require a baseline this milestone doesn't have yet (see "Validation results" and the JSON report's explicit `"not_applicable_*"` values, not a silently-omitted metric).
 - **Full relational feature engineering** (bureau history, previous applications, payment behavior) is out of scope for this milestone (see "Dataset" above).
 - **Fairness evaluation** beyond the single subgroup AUC/rate comparison above (Fairlearn demographic parity / equalized odds, `fairness_evaluations` table) is ERD Phase 5 work.
+- **No LIME (or any) explainer for non-tree models.** `SklearnPipelineRuntime` only supports tree-based models via `shap.TreeExplainer` and fails fast with a clear error otherwise (`UnsupportedModelTypeError`) — proven by a test that loads this project's *own* logistic regression baseline artifact and confirms it's rejected rather than crashing opaquely or silently misbehaving. If the baseline is ever a genuine deployment candidate, it needs its own explainer.
+- **This model is only registered inside a test's transaction**, not for real in any actual tenant's data — the end-to-end test above proves the wiring works, it doesn't mean this model is live anywhere. Real registration happens once a tenant needs it deployed.
 
 ## Artifacts
 
