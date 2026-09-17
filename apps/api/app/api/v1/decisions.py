@@ -1,13 +1,24 @@
 import uuid
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
 from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
-from app.models.decision import Decision
+from app.models.decision import DECISION_OUTCOMES, Decision
 from app.models.explanation import Explanation
 from app.services.scoring_service import ScoringRuntimeError, ScoringService, ScoringValidationError
 
 bp = Blueprint("decisions", __name__)
+
+_DEFAULT_LIST_LIMIT = 20
+_MAX_LIST_LIMIT = 100
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 @bp.post("/score")
@@ -43,6 +54,55 @@ def score_application():
         ),
         status_code,
     )
+
+
+@bp.get("/decisions")
+def list_decisions():
+    """Filterable by decision status (`outcome`), model version
+    (`model_version_id`), and time period (`date_from`/`date_to`, ISO-8601).
+    "Lending product" filtering (ERD Phase 6) isn't listed — the schema
+    doesn't model a lending-product concept yet, so there's nothing to
+    filter by.
+    """
+    try:
+        tenant = resolve_tenant()
+    except TenantResolutionError as exc:
+        return jsonify(error=exc.message), exc.status_code
+
+    query = Decision.query.filter_by(tenant_id=tenant.id)
+
+    outcome = request.args.get("outcome")
+    if outcome:
+        if outcome not in DECISION_OUTCOMES:
+            return jsonify(error=f"outcome must be one of {list(DECISION_OUTCOMES)}"), 400
+        query = query.filter_by(outcome=outcome)
+
+    model_version_id = request.args.get("model_version_id")
+    if model_version_id:
+        query = query.filter_by(model_version_id=model_version_id)
+
+    date_from = request.args.get("date_from")
+    if date_from:
+        parsed = _parse_iso_datetime(date_from)
+        if parsed is None:
+            return jsonify(error="date_from must be an ISO-8601 date/datetime"), 400
+        query = query.filter(Decision.created_at >= parsed)
+
+    date_to = request.args.get("date_to")
+    if date_to:
+        parsed = _parse_iso_datetime(date_to)
+        if parsed is None:
+            return jsonify(error="date_to must be an ISO-8601 date/datetime"), 400
+        query = query.filter(Decision.created_at <= parsed)
+
+    try:
+        limit = int(request.args.get("limit", _DEFAULT_LIST_LIMIT))
+    except ValueError:
+        return jsonify(error="limit must be an integer"), 400
+    limit = max(1, min(limit, _MAX_LIST_LIMIT))
+
+    decisions = query.order_by(Decision.created_at.desc()).limit(limit).all()
+    return jsonify(decisions=[d.to_dict() for d in decisions])
 
 
 @bp.get("/decisions/<decision_id>")

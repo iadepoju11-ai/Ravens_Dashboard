@@ -9,7 +9,7 @@ stay internally consistent is explicitly out of scope).
 from datetime import timedelta
 
 from app.extensions import db
-from app.models.audit import AuditEvent
+from app.models.audit import AuditEvent, AuditIntegrityCheck
 from app.models.tenant import Tenant
 from app.services import audit_service
 from app.services.audit_service import verify_chain
@@ -133,3 +133,33 @@ def test_verify_chain_endpoint_persists_an_integrity_check(client, app):
     assert body["valid"] is True
     assert body["events_checked"] == 2
     assert body["integrity_check_id"]
+
+
+def test_integrity_status_is_none_before_any_check_has_run(client, app):
+    tenant = _create_tenant("audit-status-empty-bank")
+    _record_events(tenant.id, 2)
+
+    response = client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+
+    assert response.status_code == 200
+    assert response.get_json()["latest_check"] is None
+
+
+def test_integrity_status_reports_the_last_check_without_running_a_new_one(client, app):
+    tenant = _create_tenant("audit-status-bank")
+    _record_events(tenant.id, 2)
+    verify_response = client.get("/api/v1/audit/verify-chain", headers={"X-Tenant-Id": tenant.id})
+    integrity_check_id = verify_response.get_json()["integrity_check_id"]
+
+    response = client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+
+    assert response.status_code == 200
+    latest_check = response.get_json()["latest_check"]
+    assert latest_check["id"] == integrity_check_id
+    assert latest_check["valid"] is True
+
+    # Reading the status again must not trigger another check.
+    count_before = AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id).count()
+    client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+    count_after = AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id).count()
+    assert count_after == count_before

@@ -51,6 +51,29 @@ def verify_audit_event(event_id: str):
     return jsonify(event_id=event.id, valid=valid, integrity_check_id=check.id)
 
 
+@bp.get("/audit/integrity-status")
+def get_latest_integrity_status():
+    """The most recently recorded AuditIntegrityCheck, without triggering
+    a fresh verification — for dashboard consumption (ERD Phase 6's
+    "audit integrity status" KPI), where re-running a full chain walk on
+    every page load would be wasteful and would write a new
+    AuditIntegrityCheck row as a side effect of just looking at one.
+    Trigger a real check via /audit/verify-chain or the periodic
+    `flask audit verify-all-tenants` command; this only reports what the
+    last one found, which may be stale."""
+    try:
+        tenant = resolve_tenant()
+    except TenantResolutionError as exc:
+        return jsonify(error=exc.message), exc.status_code
+
+    check = (
+        AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id)
+        .order_by(AuditIntegrityCheck.created_at.desc())
+        .first()
+    )
+    return jsonify(latest_check=check.to_dict() if check else None)
+
+
 @bp.get("/audit/verify-chain")
 def verify_audit_chain():
     """Verifies the tenant's entire audit chain — detects tamper,
