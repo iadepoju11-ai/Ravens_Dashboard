@@ -1,13 +1,13 @@
-"""CLI commands: `flask audit verify-all-tenants`.
+"""CLI commands: `flask audit verify-all-tenants`, `flask events publish-outbox`.
 
-Not a scheduler — this project has none yet (CLAUDE.md lists Celery/RQ as
-the intended tech, but nothing is wired up; picking one is a real
-architecture decision, not something to bolt on unilaterally alongside
-audit hardening). This command is what a scheduler would call: any
-external one (cron, a Kubernetes CronJob, GitHub Actions on a schedule)
-can run it periodically. It exits non-zero on any failure so a scheduler
-can alert on the run itself, in addition to the MonitoringAlert rows it
-writes.
+Neither is a scheduler — this project has none yet (CLAUDE.md lists
+Celery/RQ as the intended tech, but nothing is wired up; picking one is a
+real architecture decision, not something to bolt on unilaterally
+alongside audit hardening or the outbox). Both commands are what a
+scheduler would call: any external one (cron, a Kubernetes CronJob,
+GitHub Actions on a schedule) can run them periodically. Both exit
+non-zero on failure so a scheduler can alert on the run itself, in
+addition to the MonitoringAlert rows they write.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from app.extensions import db
 from app.models.monitoring import MonitoringAlert
 from app.models.tenant import Tenant
 from app.services.audit_service import verify_chain
+from app.services.outbox_service import publish_pending_events
 
 
 def register_cli(app: Flask) -> None:
@@ -59,4 +60,30 @@ def register_cli(app: Flask) -> None:
         db.session.commit()
 
         if any_invalid:
+            raise SystemExit(1)
+
+    @app.cli.group("events")
+    def events_group():
+        """Outbox/Kafka event commands."""
+
+    @events_group.command("publish-outbox")
+    def publish_outbox():
+        """Publishes every pending outbox row to Kafka. A no-op (exit 0,
+        nothing touched) if KAFKA_ENABLED is false. Exits non-zero if any
+        event permanently failed (reached MAX_ATTEMPTS) this run —
+        events merely retried (broker temporarily unreachable) don't
+        fail the command, since the next scheduled run will retry them."""
+        outcomes = publish_pending_events()
+
+        if not outcomes:
+            click.echo("no pending events (or Kafka is disabled)")
+            return
+
+        for outcome in outcomes:
+            click.echo(f"{outcome.status:9s} {outcome.event_type:24s} {outcome.event_id}")
+
+        failed = [o for o in outcomes if o.status == "failed"]
+        click.echo(f"{len(outcomes)} event(s) processed, {len(failed)} permanently failed")
+
+        if failed:
             raise SystemExit(1)

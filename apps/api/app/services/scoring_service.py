@@ -21,7 +21,7 @@ from app.models.decision import Decision
 from app.models.explanation import Explanation
 from app.models.model import ModelVersion
 from app.models.tenant import Tenant
-from app.services import audit_service
+from app.services import audit_service, outbox_service
 from app.services.model_runtime import ModelRuntime
 from app.services.runtime_resolver import resolve_runtime
 
@@ -125,6 +125,49 @@ class ScoringService:
             entity_type="decision",
             entity_id=decision.id,
             payload={"score": prediction.score, "outcome": outcome, "model_version_id": model_version.id},
+        )
+
+        # Outbox rows, not a direct Kafka call: written in the same
+        # transaction as the decision/explanation above, so "the event
+        # was recorded" and "the decision was saved" are atomic — a
+        # disabled or unreachable Kafka broker can never lose or roll
+        # back business data. request_id ties all three events from this
+        # call together as one correlation_id. Only enqueued on a genuine
+        # new decision (this branch), never on an idempotent replay —
+        # re-scoring the same request_id must not re-publish events either.
+        outbox_service.enqueue_event(
+            tenant_id=tenant.id,
+            event_type="decision.created.v1",
+            aggregate_type="decision",
+            aggregate_id=decision.id,
+            correlation_id=request_id,
+            payload={"score": prediction.score, "outcome": outcome, "model_version_id": model_version.id},
+        )
+        outbox_service.enqueue_event(
+            tenant_id=tenant.id,
+            event_type="explanation.created.v1",
+            aggregate_type="explanation",
+            aggregate_id=explanation.id,
+            correlation_id=request_id,
+            payload={
+                "decision_id": decision.id,
+                "method": explanation.method,
+                "base_value": explanation.base_value,
+            },
+        )
+        # Distinct from decision.created.v1: marks the whole /score
+        # workflow (scoring + explanation + audit) as finished, not just
+        # that the Decision row exists. Fires immediately after it today
+        # since there's no async governance step yet (ERD Phase 3's
+        # GovernanceResult is still schema-only) -- the two events will
+        # diverge in timing once one exists.
+        outbox_service.enqueue_event(
+            tenant_id=tenant.id,
+            event_type="decision.completed.v1",
+            aggregate_type="decision",
+            aggregate_id=decision.id,
+            correlation_id=request_id,
+            payload={"outcome": outcome},
         )
 
         self.session.commit()

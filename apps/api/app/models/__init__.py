@@ -7,6 +7,7 @@ from app.models.fairness import FairnessEvaluation
 from app.models.governance import GovernanceResult
 from app.models.model import Model, ModelVersion
 from app.models.monitoring import MonitoringAlert
+from app.models.outbox import OutboxEvent
 from app.models.review import ReviewCase
 from app.models.role import Role, UserRole
 from app.models.tenant import Tenant
@@ -25,6 +26,7 @@ __all__ = [
     "ModelDeployment",
     "ModelVersion",
     "MonitoringAlert",
+    "OutboxEvent",
     "ReviewCase",
     "Role",
     "Tenant",

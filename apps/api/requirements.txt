@@ -7,6 +7,16 @@ psycopg2-binary==2.9.9
 gunicorn==22.0.0
 python-dotenv==1.0.1
 
+# Transactional outbox publisher (app/services/outbox_service.py) — only
+# ever touched by `flask events publish-outbox`, never imported at
+# request-handling time, but it's a small, dependency-light pure-Python
+# package so there's no reason to make it a lazy/optional import the way
+# the ML runtime libraries below are. kafka-python-ng, not kafka-python:
+# the original kafka-python==2.0.2 ships a broken vendored `six` under
+# Python 3.12 (ModuleNotFoundError: kafka.vendor.six.moves) -- this is the
+# actively maintained fork, same `import kafka` API, drop-in compatible.
+kafka-python-ng==2.2.3
+
 # Real model runtime (apps/api/app/services/runtimes/) — loads a trained
 # artifact produced by apps/workers/ml (see docs/model_cards/). Training
 # and serving stay decoupled: this only ever joblib.loads an artifact and

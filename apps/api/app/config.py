@@ -10,9 +10,12 @@ class Config:
 
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "change-me")
 
+    # Off by default (matches the academic prototype's own KAFKA_ENABLED
+    # flag) -- the outbox table still records every event regardless, so
+    # nothing is lost while Kafka is disabled; enabling it later just lets
+    # the publisher start draining the backlog. See app/services/outbox_service.py.
+    KAFKA_ENABLED = os.environ.get("KAFKA_ENABLED", "false").lower() == "true"
     KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")
-    KAFKA_AUDIT_TOPIC = os.environ.get("KAFKA_AUDIT_TOPIC", "creditguard.audit.events")
-    KAFKA_MONITORING_TOPIC = os.environ.get("KAFKA_MONITORING_TOPIC", "creditguard.monitoring.events")
 
     MODEL_REGISTRY_URI = os.environ.get("MODEL_REGISTRY_URI", "file://./model_artifacts")
     DATASET_STORE_URI = os.environ.get("DATASET_STORE_URI", "file://./data/processed")
