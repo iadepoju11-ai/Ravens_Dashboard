@@ -68,8 +68,7 @@ def _alembic_config(app) -> Config:
 
 @pytest.fixture()
 def migrated_app():
-    app = create_app("testing")
-    app.config["SQLALCHEMY_DATABASE_URI"] = MIGRATION_DATABASE_URL
+    app = create_app("testing", database_uri=MIGRATION_DATABASE_URL)
 
     cfg = _alembic_config(app)
     with app.app_context():
@@ -79,7 +78,15 @@ def migrated_app():
         command.upgrade(cfg, "head")
         yield app
         _db.session.remove()
+        # Downgrading to base and back to head (rather than just leaving it
+        # at base) both proves the full downgrade path still works *and*
+        # leaves this shared Postgres instance at head afterwards -- other
+        # integration tests in the same run (test_db_permissions.py) depend
+        # on migration-provisioned state like the creditguard_app role,
+        # which a bare downgrade-to-base would otherwise drop out from
+        # under them regardless of test file order.
         command.downgrade(cfg, "base")
+        command.upgrade(cfg, "head")
 
 
 def test_migration_creates_all_expected_tables(migrated_app):

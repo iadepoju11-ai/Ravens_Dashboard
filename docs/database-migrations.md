@@ -45,6 +45,18 @@ close but not perfect. Specifically check:
   verify it actually reverses `upgrade()` (this matters for the migration
   smoke test below, which downgrades to `base` as part of getting a clean
   slate).
+- **A new audit/evidence table needs its own permission migration.** The
+  restricted runtime role (`creditguard_app`, see
+  `docs/local-development.md` "Database roles: owner vs runtime app") gets
+  full CRUD on new tables automatically via `ALTER DEFAULT PRIVILEGES`
+  (set up once in `a4e71d2b014c_add_restricted_runtime_db_role`) — that's
+  correct for ordinary tables, but wrong for anything that must be
+  append-only (audit trails, integrity check results, evidence records). A
+  table like that needs an explicit follow-up migration that
+  `REVOKE UPDATE, DELETE ON <table> FROM creditguard_app`, the same way
+  `audit_events`/`audit_integrity_checks` are locked down. This is easy to
+  forget precisely because the default-privileges grant makes the new table
+  "just work" without it.
 
 ## Applying migrations
 
@@ -81,3 +93,37 @@ docker compose run --rm -e DATABASE_URL=postgresql://creditguard:creditguard@pos
 
 Run this after every migration change, not just the SQLite-backed suite —
 it is the only test that exercises the real migration path end to end.
+
+Its fixture restores the database to `head` in teardown (downgrade to
+`base`, then back up to `head`), not just downgrading to `base` and
+stopping there — this suite runs against a real, persistent Postgres
+shared with other integration tests in the same run (e.g.
+`test_db_permissions.py`), and those depend on migration-provisioned state
+like the `creditguard_app` role. Leaving the database at `base` after this
+test would drop that role out from under any test that happens to run
+afterward.
+
+## Gotcha: overriding `SQLALCHEMY_DATABASE_URI` after `create_app()` does nothing
+
+Flask-SQLAlchemy 3.x builds the engine for the default bind **inside**
+`db.init_app()` and never re-reads `app.config` afterwards (this is
+documented behavior, not a bug in that library). Code like this looks
+reasonable but silently keeps using whichever URI `create_app()`'s config
+class defaulted to:
+
+```python
+app = create_app("testing")
+app.config["SQLALCHEMY_DATABASE_URI"] = some_other_url  # no effect — too late
+```
+
+This bit both `test_migrations.py` and `test_db_permissions.py`, which need
+a real Postgres URL rather than `TestingConfig`'s SQLite default. The fix
+is `create_app`'s `database_uri` parameter (`app/__init__.py`), which sets
+the config **before** calling `db.init_app()`:
+
+```python
+app = create_app("testing", database_uri=some_other_url)
+```
+
+Any future fixture that needs a Flask app bound to a non-default database
+must go through this parameter, not a post-hoc config assignment.

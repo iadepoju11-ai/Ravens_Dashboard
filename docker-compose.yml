@@ -43,9 +43,21 @@ services:
       context: ./apps/api
     env_file: .env
     environment:
+      # The running app connects as the restricted creditguard_app role
+      # (CHECKLIST.md Phase 5 DB permission separation) -- it can read/write
+      # ordinary tables but only ever INSERT into audit tables, and has no
+      # DDL rights at all. Migrations run separately as the owner role
+      # (DATABASE_URL overridden explicitly), see docs/database-migrations.md.
       # Container-to-container networking always uses the service name and
       # the *internal* port, regardless of the host-side port mapping above.
-      DATABASE_URL: postgresql://creditguard:creditguard@postgres:5432/creditguard
+      DATABASE_URL: postgresql://creditguard_app:${APP_DB_PASSWORD:-creditguard_app_dev_password}@postgres:5432/creditguard
+      # Same restricted role, addressed the same way, for the permission
+      # tests in tests/integration/test_db_permissions.py. .env's copy of
+      # this variable is host-side (localhost:5433) for tools run directly
+      # on the host -- this override replaces it with the container-internal
+      # address so `docker compose run api pytest ...` always exercises the
+      # real permission checks rather than silently skipping them.
+      APP_DATABASE_URL: postgresql://creditguard_app:${APP_DB_PASSWORD:-creditguard_app_dev_password}@postgres:5432/creditguard
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres:
