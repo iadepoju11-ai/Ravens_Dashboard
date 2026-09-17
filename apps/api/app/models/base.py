@@ -11,7 +11,7 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-def _utcnow() -> datetime:
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
@@ -46,4 +46,4 @@ class UUIDPKMixin:
 
 
 class TimestampMixin:
-    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, nullable=False)
