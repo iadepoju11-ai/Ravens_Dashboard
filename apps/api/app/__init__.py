@@ -19,7 +19,9 @@ def create_app(config_name: str | None = None) -> Flask:
 
     from app import models  # noqa: F401  (registers ORM models with SQLAlchemy metadata)
     from app.api.v1 import register_blueprints
+    from app.cli import register_cli
 
     register_blueprints(app)
+    register_cli(app)
 
     return app

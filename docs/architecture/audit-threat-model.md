@@ -72,10 +72,12 @@ whether it passed — but nothing runs either of them automatically today
 - **Independently protected integrity commitments** — as described above,
   the actual defense against a privileged/full-DB attacker. Requires an
   external system this app doesn't control.
-- **Periodic verification + alerting** — `verify_chain` must be run
-  manually today (via the API) rather than on a schedule that raises a
-  `MonitoringAlert` on failure; no scheduler/worker infrastructure exists
-  yet.
+- **Periodic verification + alerting** — `flask audit verify-all-tenants`
+  (`app/cli.py`) runs `verify_chain` for every tenant and writes a
+  `MonitoringAlert` on failure, but nothing calls it on a schedule yet.
+  Any external scheduler (cron, a Kubernetes CronJob, a scheduled CI job)
+  can; choosing one is a real architecture decision, not folded into this
+  work.
 - **Separate audit-write DB permissions from ordinary CRUD** — the app
   connects to Postgres with one role that can read/write everything,
   including `audit_events`. A compromised app process can currently both
