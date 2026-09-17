@@ -22,6 +22,7 @@ node_modules/
 dist/
 build/
 .vite/
+*.tsbuildinfo
 
 # Data & model artefacts (never commit raw personal data or binaries).
 # Ignore everything under data/ by default, then explicitly allow only the
