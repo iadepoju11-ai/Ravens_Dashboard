@@ -44,7 +44,7 @@ def test_score_application_creates_decision_and_explanation(client, app, auth_he
     assert body["explanation"]["feature_attributions"]
 
     decision_id = body["decision"]["id"]
-    get_response = client.get(f"/api/v1/decisions/{decision_id}", headers={"X-Tenant-Id": tenant.id})
+    get_response = client.get(f"/api/v1/decisions/{decision_id}", headers=auth_headers(tenant.id))
     assert get_response.status_code == 200
     assert get_response.get_json()["decision"]["id"] == decision_id
 
@@ -82,15 +82,14 @@ def test_audit_event_is_recorded_and_verifiable(client, app, auth_headers):
         headers=auth_headers(tenant.id),
     )
     decision_id = score_response.get_json()["decision"]["id"]
+    auditor_headers = auth_headers(tenant.id, roles=("auditor",), sub="auditor-1")
 
-    events_response = client.get("/api/v1/audit/events", headers={"X-Tenant-Id": tenant.id})
+    events_response = client.get("/api/v1/audit/events", headers=auditor_headers)
     events = events_response.get_json()["events"]
     assert len(events) == 1
     assert events[0]["entity_id"] == decision_id
 
-    verify_response = client.get(
-        f"/api/v1/audit/events/{events[0]['id']}/verify", headers={"X-Tenant-Id": tenant.id}
-    )
+    verify_response = client.get(f"/api/v1/audit/events/{events[0]['id']}/verify", headers=auditor_headers)
     verify_body = verify_response.get_json()
     assert verify_body["valid"] is True
     assert verify_body["integrity_check_id"]
@@ -193,7 +192,7 @@ def test_score_replays_idempotently_by_request_id(client, app, auth_headers):
     assert Decision.query.filter_by(tenant_id=tenant.id).count() == 1
 
 
-def test_deploying_a_model_version_supersedes_the_previous_deployment(client, app):
+def test_deploying_a_model_version_supersedes_the_previous_deployment(client, app, auth_headers):
     tenant, first_version = _create_tenant_and_model()
 
     second_version = ModelVersion(
@@ -206,7 +205,8 @@ def test_deploying_a_model_version_supersedes_the_previous_deployment(client, ap
     db.session.commit()
 
     response = client.post(
-        f"/api/v1/models/{second_version.id}/deploy", headers={"X-Tenant-Id": tenant.id}
+        f"/api/v1/models/{second_version.id}/deploy",
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
     assert response.status_code == 200
     assert response.get_json()["model_version"]["status"] == "deployed"

@@ -122,11 +122,13 @@ def test_fork_is_detected(app):
     assert any(f.reason == "duplicate_predecessor" for f in result.failures)
 
 
-def test_verify_chain_endpoint_persists_an_integrity_check(client, app):
+def test_verify_chain_endpoint_persists_an_integrity_check(client, app, auth_headers):
     tenant = _create_tenant("audit-endpoint-bank")
     _record_events(tenant.id, 2)
 
-    response = client.get("/api/v1/audit/verify-chain", headers={"X-Tenant-Id": tenant.id})
+    response = client.get(
+        "/api/v1/audit/verify-chain", headers=auth_headers(tenant.id, roles=("auditor",))
+    )
 
     assert response.status_code == 200
     body = response.get_json()
@@ -135,23 +137,26 @@ def test_verify_chain_endpoint_persists_an_integrity_check(client, app):
     assert body["integrity_check_id"]
 
 
-def test_integrity_status_is_none_before_any_check_has_run(client, app):
+def test_integrity_status_is_none_before_any_check_has_run(client, app, auth_headers):
     tenant = _create_tenant("audit-status-empty-bank")
     _record_events(tenant.id, 2)
 
-    response = client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+    response = client.get(
+        "/api/v1/audit/integrity-status", headers=auth_headers(tenant.id, roles=("auditor",))
+    )
 
     assert response.status_code == 200
     assert response.get_json()["latest_check"] is None
 
 
-def test_integrity_status_reports_the_last_check_without_running_a_new_one(client, app):
+def test_integrity_status_reports_the_last_check_without_running_a_new_one(client, app, auth_headers):
     tenant = _create_tenant("audit-status-bank")
     _record_events(tenant.id, 2)
-    verify_response = client.get("/api/v1/audit/verify-chain", headers={"X-Tenant-Id": tenant.id})
+    headers = auth_headers(tenant.id, roles=("auditor",))
+    verify_response = client.get("/api/v1/audit/verify-chain", headers=headers)
     integrity_check_id = verify_response.get_json()["integrity_check_id"]
 
-    response = client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/audit/integrity-status", headers=headers)
 
     assert response.status_code == 200
     latest_check = response.get_json()["latest_check"]
@@ -160,6 +165,6 @@ def test_integrity_status_reports_the_last_check_without_running_a_new_one(clien
 
     # Reading the status again must not trigger another check.
     count_before = AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id).count()
-    client.get("/api/v1/audit/integrity-status", headers={"X-Tenant-Id": tenant.id})
+    client.get("/api/v1/audit/integrity-status", headers=headers)
     count_after = AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id).count()
     assert count_after == count_before

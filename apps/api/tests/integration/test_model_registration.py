@@ -29,13 +29,13 @@ def _create_tenant(slug: str) -> Tenant:
     return tenant
 
 
-def test_register_model_version_creates_a_draft(client, app):
+def test_register_model_version_creates_a_draft(client, app, auth_headers):
     tenant = _create_tenant("model-registration-bank")
 
     response = client.post(
         "/api/v1/models",
         json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
 
     assert response.status_code == 201
@@ -44,30 +44,31 @@ def test_register_model_version_creates_a_draft(client, app):
     assert body["model"]["name"] == "credit-risk"
 
 
-def test_registering_the_same_model_version_twice_is_rejected(client, app):
+def test_registering_the_same_model_version_twice_is_rejected(client, app, auth_headers):
     tenant = _create_tenant("model-registration-dup-bank")
     payload = {"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"}
+    headers = auth_headers(tenant.id, roles=("compliance_officer",))
 
-    first = client.post("/api/v1/models", json=payload, headers={"X-Tenant-Id": tenant.id})
+    first = client.post("/api/v1/models", json=payload, headers=headers)
     assert first.status_code == 201
 
-    second = client.post("/api/v1/models", json=payload, headers={"X-Tenant-Id": tenant.id})
+    second = client.post("/api/v1/models", json=payload, headers=headers)
     assert second.status_code == 409
 
 
-def test_register_model_version_requires_name_version_and_artifact_uri(client, app):
+def test_register_model_version_requires_name_version_and_artifact_uri(client, app, auth_headers):
     tenant = _create_tenant("model-registration-validation-bank")
 
     response = client.post(
         "/api/v1/models",
         json={"name": "credit-risk"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
 
     assert response.status_code == 400
 
 
-def test_register_model_version_rejects_unknown_training_dataset_version(client, app):
+def test_register_model_version_rejects_unknown_training_dataset_version(client, app, auth_headers):
     tenant = _create_tenant("model-registration-unknown-dataset-bank")
 
     response = client.post(
@@ -78,13 +79,13 @@ def test_register_model_version_rejects_unknown_training_dataset_version(client,
             "artifact_uri": "file://./does-not-matter.pkl",
             "training_dataset_version_id": "00000000-0000-0000-0000-000000000000",
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
 
     assert response.status_code == 404
 
 
-def test_register_model_version_links_a_real_dataset_version(client, app):
+def test_register_model_version_links_a_real_dataset_version(client, app, auth_headers):
     tenant = _create_tenant("model-registration-dataset-link-bank")
 
     dataset_response = client.post(
@@ -103,51 +104,49 @@ def test_register_model_version_links_a_real_dataset_version(client, app):
             "artifact_uri": "file://./does-not-matter.pkl",
             "training_dataset_version_id": dataset_version_id,
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
     assert model_response.status_code == 201
 
 
-def test_approve_draft_model_version(client, app):
+def test_approve_draft_model_version(client, app, auth_headers):
     tenant = _create_tenant("model-approval-bank")
+    headers = auth_headers(tenant.id, roles=("compliance_officer",))
     register_response = client.post(
         "/api/v1/models",
         json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=headers,
     )
     model_version_id = register_response.get_json()["model_version"]["id"]
 
-    response = client.post(
-        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
-    )
+    response = client.post(f"/api/v1/models/{model_version_id}/approve", headers=headers)
 
     assert response.status_code == 200
     assert response.get_json()["model_version"]["status"] == "approved"
 
 
-def test_approving_an_already_approved_version_is_rejected(client, app):
+def test_approving_an_already_approved_version_is_rejected(client, app, auth_headers):
     tenant = _create_tenant("model-approval-dup-bank")
+    headers = auth_headers(tenant.id, roles=("compliance_officer",))
     register_response = client.post(
         "/api/v1/models",
         json={"name": "credit-risk", "version": "1.0.0-dev", "artifact_uri": "file://./does-not-matter.pkl"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=headers,
     )
     model_version_id = register_response.get_json()["model_version"]["id"]
-    client.post(f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id})
+    client.post(f"/api/v1/models/{model_version_id}/approve", headers=headers)
 
-    response = client.post(
-        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
-    )
+    response = client.post(f"/api/v1/models/{model_version_id}/approve", headers=headers)
 
     assert response.status_code == 409
 
 
-def test_approving_an_unknown_model_version_is_rejected(client, app):
+def test_approving_an_unknown_model_version_is_rejected(client, app, auth_headers):
     tenant = _create_tenant("model-approval-unknown-bank")
 
     response = client.post(
         "/api/v1/models/00000000-0000-0000-0000-000000000000/approve",
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
     )
 
     assert response.status_code == 404
@@ -174,6 +173,7 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
     assert dataset_response.status_code == 201
     dataset_version_id = dataset_response.get_json()["version"]["id"]
 
+    model_headers = auth_headers(tenant.id, roles=("compliance_officer",))
     register_response = client.post(
         "/api/v1/models",
         json={
@@ -183,20 +183,16 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
             "metrics": {"features": metadata["features"]},
             "training_dataset_version_id": dataset_version_id,
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=model_headers,
     )
     assert register_response.status_code == 201
     model_version_id = register_response.get_json()["model_version"]["id"]
     assert register_response.get_json()["model_version"]["id"] == model_version_id
 
-    approve_response = client.post(
-        f"/api/v1/models/{model_version_id}/approve", headers={"X-Tenant-Id": tenant.id}
-    )
+    approve_response = client.post(f"/api/v1/models/{model_version_id}/approve", headers=model_headers)
     assert approve_response.status_code == 200
 
-    deploy_response = client.post(
-        f"/api/v1/models/{model_version_id}/deploy", headers={"X-Tenant-Id": tenant.id}
-    )
+    deploy_response = client.post(f"/api/v1/models/{model_version_id}/deploy", headers=model_headers)
     assert deploy_response.status_code == 200
 
     score_response = client.post(

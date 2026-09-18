@@ -38,7 +38,13 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         {
             "decisions:read",
             "models:read",
+            # No dedicated data-scientist/model-ops role exists among the
+            # five CreditGuard roles -- compliance_officer owns the whole
+            # model lifecycle (register -> approve -> deploy) for now,
+            # not just the approval step. Revisit if that changes.
+            "models:create",
             "models:approve",
+            "models:deploy",
             "fairness:read",
             "fairness:review",
         }

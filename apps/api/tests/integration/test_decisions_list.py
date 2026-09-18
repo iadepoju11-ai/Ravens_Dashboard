@@ -42,7 +42,7 @@ def test_list_decisions_returns_recent_decisions_newest_first(client, app, auth_
     _score(client, tenant, "APP-1", 0.1, "req-1", auth_headers)
     _score(client, tenant, "APP-2", 0.9, "req-2", auth_headers)
 
-    response = client.get("/api/v1/decisions", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/decisions", headers=auth_headers(tenant.id))
 
     assert response.status_code == 200
     decisions = response.get_json()["decisions"]
@@ -54,17 +54,17 @@ def test_list_decisions_filters_by_outcome(client, app, auth_headers):
     _score(client, tenant, "APP-LOW", 0.1, "req-low", auth_headers)  # approve
     _score(client, tenant, "APP-HIGH", 0.9, "req-high", auth_headers)  # decline
 
-    response = client.get("/api/v1/decisions?outcome=decline", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/decisions?outcome=decline", headers=auth_headers(tenant.id))
 
     assert response.status_code == 200
     decisions = response.get_json()["decisions"]
     assert [d["application_reference"] for d in decisions] == ["APP-HIGH"]
 
 
-def test_list_decisions_rejects_an_invalid_outcome(client, app):
+def test_list_decisions_rejects_an_invalid_outcome(client, app, auth_headers):
     tenant, _ = _create_tenant_and_model()
 
-    response = client.get("/api/v1/decisions?outcome=not_a_real_outcome", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/decisions?outcome=not_a_real_outcome", headers=auth_headers(tenant.id))
 
     assert response.status_code == 400
 
@@ -74,23 +74,23 @@ def test_list_decisions_filters_by_model_version(client, app, auth_headers):
     _score(client, tenant, "APP-1", 0.1, "req-1", auth_headers)
 
     response = client.get(
-        f"/api/v1/decisions?model_version_id={model_version.id}", headers={"X-Tenant-Id": tenant.id}
+        f"/api/v1/decisions?model_version_id={model_version.id}", headers=auth_headers(tenant.id)
     )
     assert response.status_code == 200
     assert len(response.get_json()["decisions"]) == 1
 
     response = client.get(
         "/api/v1/decisions?model_version_id=00000000-0000-0000-0000-000000000000",
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id),
     )
     assert response.status_code == 200
     assert response.get_json()["decisions"] == []
 
 
-def test_list_decisions_rejects_an_unparseable_date(client, app):
+def test_list_decisions_rejects_an_unparseable_date(client, app, auth_headers):
     tenant, _ = _create_tenant_and_model()
 
-    response = client.get("/api/v1/decisions?date_from=not-a-date", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/decisions?date_from=not-a-date", headers=auth_headers(tenant.id))
 
     assert response.status_code == 400
 
@@ -100,7 +100,7 @@ def test_list_decisions_limit_is_clamped(client, app, auth_headers):
     for i in range(3):
         _score(client, tenant, f"APP-{i}", 0.1, f"req-{i}", auth_headers)
 
-    response = client.get("/api/v1/decisions?limit=1", headers={"X-Tenant-Id": tenant.id})
+    response = client.get("/api/v1/decisions?limit=1", headers=auth_headers(tenant.id))
 
     assert response.status_code == 200
     assert len(response.get_json()["decisions"]) == 1
@@ -118,7 +118,7 @@ def test_list_decisions_does_not_leak_other_tenants(client, app, auth_headers):
     _score(client, tenant_a, "APP-A", 0.1, "req-a", auth_headers, sub="user-a")
     _score(client, tenant_b, "APP-B", 0.1, "req-b", auth_headers, sub="user-b")
 
-    response = client.get("/api/v1/decisions", headers={"X-Tenant-Id": tenant_a.id})
+    response = client.get("/api/v1/decisions", headers=auth_headers(tenant_a.id, sub="user-a"))
 
     decisions = response.get_json()["decisions"]
     assert [d["application_reference"] for d in decisions] == ["APP-A"]

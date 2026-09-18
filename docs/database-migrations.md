@@ -103,6 +103,19 @@ like the `creditguard_app` role. Leaving the database at `base` after this
 test would drop that role out from under any test that happens to run
 afterward.
 
+Running it while a *persistent* `api` container (`docker compose up -d
+api`) is also connected to the same Postgres has a related, milder
+symptom: this test's `downgrade` step drops and recreates the
+`creditguard_app` role entirely (same role name, new Postgres role
+underneath), but a connection already pooled by the long-running api
+process keeps working against whatever grants existed at the time it was
+opened. The next request through that stale pooled connection can fail
+with `permission denied for table ...` even though `\dp <table>` shows
+the grant is fine — `docker compose restart api` (fresh connection pool)
+clears it. Not a bug in the migration or the app; just a real consequence
+of running a schema-destructive test suite against a database something
+else is actively connected to.
+
 ## Gotcha: overriding `SQLALCHEMY_DATABASE_URI` after `create_app()` does nothing
 
 Flask-SQLAlchemy 3.x builds the engine for the default bind **inside**

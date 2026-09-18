@@ -1,18 +1,23 @@
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.dataset import DatasetVersion
 from app.models.deployment import ModelDeployment
 from app.models.model import Model, ModelVersion
+from app.security.authentication import authenticate
+from app.security.permissions import require_permission
 
 bp = Blueprint("models", __name__)
 
 
 @bp.get("/models")
 def list_models():
+    identity = authenticate()
+    require_permission(identity, "models:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -31,8 +36,11 @@ def register_model_version():
     (identified by tenant + name) on first use. New versions always start
     as "draft" — approval and deployment are separate, deliberate steps
     (see deploy_model below); nothing here can put a version live."""
+    identity = authenticate()
+    require_permission(identity, "models:create")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -77,14 +85,12 @@ def register_model_version():
 
 @bp.post("/models/<model_id>/approve")
 def approve_model_version(model_id: str):
-    """Approve a draft model version. `model_id` names a ModelVersion id.
+    """Approve a draft model version. `model_id` names a ModelVersion id."""
+    identity = authenticate()
+    require_permission(identity, "models:approve")
 
-    No reviewer identity is recorded yet — ModelVersion.approved_by is a
-    foreign key to users.id, and there is no authenticated user to
-    attribute this to until the OIDC/RBAC workstream (auth.py) lands.
-    """
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -97,6 +103,7 @@ def approve_model_version(model_id: str):
 
     model_version.status = "approved"
     model_version.approved_at = db.func.now()
+    model_version.approved_by = identity.user_id
     db.session.commit()
 
     return jsonify(model_version=model_version.to_dict())
@@ -106,8 +113,11 @@ def approve_model_version(model_id: str):
 def deploy_model(model_id: str):
     """Deploy a model *version*. `model_id` names a ModelVersion id — kept
     as the URL segment name to match the ERD's fixed route shape."""
+    identity = authenticate()
+    require_permission(identity, "models:deploy")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -141,6 +151,7 @@ def deploy_model(model_id: str):
         model_version_id=model_version.id,
         previous_deployment_id=previous_deployment.id if previous_deployment else None,
         status="active",
+        deployed_by=identity.user_id,
     )
     db.session.add(deployment)
     db.session.commit()

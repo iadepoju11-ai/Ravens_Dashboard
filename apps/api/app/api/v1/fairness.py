@@ -1,15 +1,20 @@
 from flask import Blueprint, jsonify
 
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.fairness import FairnessEvaluation
+from app.security.authentication import authenticate
+from app.security.permissions import require_permission
 
 bp = Blueprint("fairness", __name__)
 
 
 @bp.get("/fairness/reports")
 def list_fairness_reports():
+    identity = authenticate()
+    require_permission(identity, "fairness:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -23,8 +28,11 @@ def list_fairness_reports():
 
 @bp.get("/fairness/reports/<report_id>")
 def get_fairness_report(report_id: str):
+    identity = authenticate()
+    require_permission(identity, "fairness:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 

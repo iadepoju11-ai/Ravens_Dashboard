@@ -1,6 +1,6 @@
 import os
 
-from flask import Flask
+from flask import Flask, jsonify
 
 from app.config import CONFIG_BY_NAME
 from app.extensions import cors, db, jwt, migrate
@@ -30,8 +30,23 @@ def create_app(config_name: str | None = None, database_uri: str | None = None) 
     from app import models  # noqa: F401  (registers ORM models with SQLAlchemy metadata)
     from app.api.v1 import register_blueprints
     from app.cli import register_cli
+    from app.security.jwt_verifier import TokenValidationError
+    from app.security.permissions import AuthorizationError
 
     register_blueprints(app)
     register_cli(app)
+
+    # Every OIDC-migrated route (app/security/) raises one of these two --
+    # never a route-specific message -- so handling them once here instead
+    # of in a try/except repeated in every route avoids that duplication
+    # scaling with the number of protected endpoints. Routes not yet
+    # migrated (still on the X-Tenant-Id header) never raise either.
+    @app.errorhandler(TokenValidationError)
+    def _handle_token_validation_error(exc: TokenValidationError):
+        return jsonify(error=exc.message), exc.status_code
+
+    @app.errorhandler(AuthorizationError)
+    def _handle_authorization_error(exc: AuthorizationError):
+        return jsonify(error=exc.message), exc.status_code
 
     return app

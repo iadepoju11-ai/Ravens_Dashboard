@@ -1,8 +1,10 @@
 from flask import Blueprint, jsonify
 
 from app.extensions import db
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.audit import AuditEvent, AuditIntegrityCheck, compute_hash
+from app.security.authentication import authenticate
+from app.security.permissions import require_permission
 from app.services.audit_service import verify_chain
 
 bp = Blueprint("audit", __name__)
@@ -10,8 +12,11 @@ bp = Blueprint("audit", __name__)
 
 @bp.get("/audit/events")
 def list_audit_events():
+    identity = authenticate()
+    require_permission(identity, "audit:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -24,8 +29,11 @@ def verify_audit_event(event_id: str):
     """Checks only this one event's own hash against its own recorded
     fields. This does NOT detect a deleted or forked event elsewhere in
     the chain — use /audit/verify-chain for that."""
+    identity = authenticate()
+    require_permission(identity, "audit:verify")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -61,8 +69,11 @@ def get_latest_integrity_status():
     Trigger a real check via /audit/verify-chain or the periodic
     `flask audit verify-all-tenants` command; this only reports what the
     last one found, which may be stale."""
+    identity = authenticate()
+    require_permission(identity, "audit:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -80,8 +91,11 @@ def verify_audit_chain():
     deletion, reordering (via timestamp tampering), and forks. See
     app/services/audit_service.py::verify_chain for what each failure
     reason means and this store's threat model."""
+    identity = authenticate()
+    require_permission(identity, "audit:verify")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
