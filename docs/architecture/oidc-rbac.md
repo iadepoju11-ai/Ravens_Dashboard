@@ -118,11 +118,10 @@ they need it.
 
 ## Frontend (apps/web)
 
-Real login only, Overview page only — the other stub pages
-(`NotYetBuiltPage`) are unchanged. Authorization Code + PKCE against the
-`creditguard-web` Keycloak client (public, no secret, browser-appropriate
-— never the password/direct grant used for manual API testing), via
-`react-oidc-context`:
+Every route is now a real page (no `NotYetBuiltPage` left). Authorization
+Code + PKCE against the `creditguard-web` Keycloak client (public, no
+secret, browser-appropriate — never the password/direct grant used for
+manual API testing), via `react-oidc-context`:
 
 - `src/services/authConfig.ts` — the one place `react-oidc-context` is
   configured; nothing else imports it directly.
@@ -141,6 +140,38 @@ Real login only, Overview page only — the other stub pages
   migrated endpoints) and `X-Tenant-Id` (for the ones that still need it)
   on every call — harmless for either side to receive the one it ignores.
 
+### Pages
+
+| Page | Backend it calls | Auth |
+| --- | --- | --- |
+| Overview | `/monitoring/metrics`, `/monitoring/alerts`, `/decisions`, `/audit/integrity-status`, `/fairness/reports`, `/health` | mixed (see below) |
+| Score | `POST /score` | Bearer |
+| Decisions (list + detail) | `/decisions`, `/decisions/<id>` | Bearer |
+| Models | `/models`, `POST /models`, `/models/<id>/approve`, `/models/<id>/deploy` | Bearer |
+| Datasets | `/datasets`, `POST /datasets` | `X-Tenant-Id` (not migrated) |
+| Fairness | `/fairness/reports` | Bearer |
+| Audit | `/audit/events`, `/audit/integrity-status`, `/audit/verify-chain`, `/audit/events/<id>/verify` | Bearer |
+| Monitoring | `/monitoring/metrics`, `/monitoring/alerts` | `X-Tenant-Id` (not migrated) |
+| Admin | `/tenants` (read-only, own tenant only) | `X-Tenant-Id` (not migrated) |
+
+Write actions (Score, Models' register/approve/deploy, Datasets' register)
+attempt the call and surface a 403/400 from the backend as a plain error
+message rather than duplicating the role→permission table client-side —
+the backend stays the single source of truth for who can do what; the
+frontend never guesses. Admin is deliberately minimal: no user/role/
+tenant-management endpoint exists yet, so it shows the one real thing
+that does (`GET /tenants`) instead of a CRUD UI with nothing behind it.
+
+Verified end to end against the real API and a real Keycloak-issued
+token (not just the mocked-`useIdentity` unit tests, which check
+rendering, not backend integration): every one of the endpoints above,
+called exactly the way each page calls it, using tokens with the roles
+each write action requires (`compliance_officer` for models/datasets,
+`auditor` for the audit chain, `credit_analyst` for scoring) — register
+→ approve → deploy a model version, register a dataset, verify the audit
+chain, and read decisions/audit/fairness/monitoring/tenant, all against
+the live Postgres-backed API.
+
 Verified as an actual Authorization Code + PKCE round trip, not just unit
 tests against a mocked identity: no browser automation is available in
 this environment, so the verification script drove the real HTTP flow
@@ -150,9 +181,10 @@ exchange it at the real `/token` endpoint, then call the real API with
 the resulting access token) — this is the exact protocol sequence
 `oidc-client-ts` performs internally, just scripted instead of clicked.
 It came back clean: correct `iss`/`aud`/`tenant_id`/roles on the issued
-token, and a real 200 from `GET /decisions`. A human still needs to
-click through the actual browser UX at least once — that part is not
-substitutable.
+token, and a real 200 from `GET /decisions`. **Confirmed in a real
+browser** for the login flow and the Overview page (2026-09-18); the
+other eight pages built afterward have only been verified by script
+(above) and unit test so far, not clicked through by a human yet.
 
 ## Testing approach
 

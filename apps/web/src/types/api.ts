@@ -19,6 +19,72 @@ export interface Decision {
   created_at: string;
 }
 
+export interface Explanation {
+  id: string;
+  decision_id: string;
+  method: string;
+  base_value: number;
+  feature_attributions: Record<string, number>;
+  created_at: string;
+}
+
+export type ModelVersionStatus = "draft" | "approved" | "deployed" | "archived";
+
+export interface ModelVersion {
+  id: string;
+  model_id: string;
+  version: string;
+  status: ModelVersionStatus;
+  artifact_uri: string;
+  metrics: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface Model {
+  id: string;
+  tenant_id: string;
+  name: string;
+  created_at: string;
+  versions: ModelVersion[];
+}
+
+export interface ModelDeployment {
+  id: string;
+  tenant_id: string;
+  model_version_id: string;
+  status: "active" | "rolled_back";
+  deployed_at: string;
+  rolled_back_at: string | null;
+}
+
+export interface Dataset {
+  id: string;
+  tenant_id: string;
+  name: string;
+  created_at: string;
+  versions: DatasetVersion[];
+}
+
+export interface DatasetVersion {
+  id: string;
+  dataset_id: string;
+  version: string;
+  uri: string;
+  row_count: number | null;
+  created_at: string;
+}
+
+export interface AuditEvent {
+  id: string;
+  tenant_id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string;
+  hash: string;
+  prev_hash: string | null;
+  created_at: string;
+}
+
 export interface MonitoringAlert {
   id: string;
   tenant_id: string;
