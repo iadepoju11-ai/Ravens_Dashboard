@@ -10,9 +10,12 @@ deploys it via `POST /api/v1/models/<id>/deploy`, and confirms `/score`
 returns real `shap-tree` explanations. See "What's not done yet" for what
 that end-to-end path still doesn't cover.
 
-Trained: 2026-09-16, retrained 2026-09-18 (same approach/data/seed — the
-retrain added the data-quality and leakage-check reports below; model
-performance is unchanged within floating-point noise). Reproducible via
+Trained: 2026-09-16, retrained 2026-09-18 twice (same approach/data/seed
+both times — the first retrain added the data-quality and leakage-check
+reports below, the second added the Fairlearn fairness evaluation below;
+model performance is unchanged within floating-point noise both times,
+confirmed by re-running `tests/unit/test_explanation_regression.py`'s
+pinned values against the new artifact). Reproducible via
 `apps/workers/ml/pipeline.py`
 (`docker build -t creditguard-ml-workers ./apps/workers && docker run --rm
 -v <path-to-home_credit-csvs>:/workers/data/home_credit:ro -v
@@ -75,7 +78,33 @@ XGBoost outperforms the logistic regression baseline on every metric, and valida
 | F | 30,429 | 6.96% | 0.7535 |
 | M | 15,698 | 10.23% | 0.7525 |
 
-ROC-AUC is close across groups (no large discriminative-power gap), but the **positive (default) rate differs meaningfully** between groups in this public dataset (6.96% vs 10.23%). This is reported as a fact about the data and this model's predictions on it — **not** a fairness verdict; per `CLAUDE.md`, statistical monitoring, legal compliance, and business policy review are different things, and this single AUC/rate comparison on a public benchmark is not equivalent to Fairlearn-based fairness monitoring (`fairness_evaluations`, ERD Phase 5) against a real deployed model and real outcomes.
+ROC-AUC is close across groups (no large discriminative-power gap), but the **positive (default) rate differs meaningfully** between groups in this public dataset (6.96% vs 10.23%). This is reported as a fact about the data and this model's predictions on it — **not** a fairness verdict; per `CLAUDE.md`, statistical monitoring, legal compliance, and business policy review are different things, and this single AUC/rate comparison on a public benchmark is not equivalent to Fairlearn-based fairness monitoring below.
+
+## Fairness evaluation (Fairlearn)
+
+`apps/workers/ml/fairness.py::evaluate_fairness()` — real Fairlearn
+metrics, computed against the same 46,127-row holdout split, at the
+model's fixed decision threshold (0.5). Groups below 30 rows are excluded
+from the comparison and reported separately, not folded in or silently
+dropped (none were excluded on this holdout — both `F` and `M` cleared
+the bar).
+
+| Protected attribute | Metric | Value | Threshold | Result |
+| --- | --- | --- | --- | --- |
+| `CODE_GENDER` | Demographic parity difference | 0.0987 | 0.10 | **Within threshold** |
+| `CODE_GENDER` | Equalized odds difference | 0.0874 | 0.10 | **Within threshold** |
+
+Both metrics pass their (configurable, illustrative — see `fairness.py`)
+0.10 thresholds, though demographic parity difference is close to it
+(0.0987 vs 0.10). As with subgroup performance above, this is a
+statistical check against one configured metric and threshold — **not**
+a legal or ethical fairness verdict.
+
+This is computed offline (the ML worker has no database access) and
+persisted via `POST /api/v1/fairness/evaluate` — the same endpoint any
+future scheduled fairness-monitoring job would call — which also raises
+a `MonitoringAlert` (severity `high`) for any metric that fails its
+threshold. Full numbers: `model_artifacts/credit-risk-v1-fairness-report.json`.
 
 ## SHAP explanation fidelity
 
@@ -88,8 +117,8 @@ This confirms the SHAP explanations are faithful to what the model actually comp
 ## What's not done yet
 
 - **No drift or out-of-time stability metrics** — both require a baseline this milestone doesn't have yet (see "Validation results" and the JSON report's explicit `"not_applicable_*"` values, not a silently-omitted metric).
-- **Full relational feature engineering** (bureau history, previous applications, payment behavior) is out of scope for this milestone (see "Dataset" above).
-- **Fairness evaluation** beyond the single subgroup AUC/rate comparison above (Fairlearn demographic parity / equalized odds, `fairness_evaluations` table) is ERD Phase 5 work.
+- **Full relational feature engineering** is still only partly done: bureau history + previous applications are covered as a **separate comparison run**, not folded into this model — see `docs/model_cards/credit-risk-v1-relational-comparison.md` (+0.0068 holdout ROC-AUC). Payment-history tables (`bureau_balance.csv`, `installments_payments.csv`, `POS_CASH_balance.csv`, `credit_card_balance.csv`) remain entirely out of scope.
+- **Governance review workflow** (`review_cases`/`GovernanceResult` tables) and **drift monitoring against a deployed baseline** remain schema-only / not started — see `CHECKLIST.md`.
 - **No LIME (or any) explainer for non-tree models.** `SklearnPipelineRuntime` only supports tree-based models via `shap.TreeExplainer` and fails fast with a clear error otherwise (`UnsupportedModelTypeError`) — proven by a test that loads this project's *own* logistic regression baseline artifact and confirms it's rejected rather than crashing opaquely or silently misbehaving. If the baseline is ever a genuine deployment candidate, it needs its own explainer.
 - **This model is only registered inside a test's transaction**, not for real in any actual tenant's data — the end-to-end test above proves the wiring works, it doesn't mean this model is live anywhere. Real registration happens once a tenant needs it deployed.
 
@@ -103,3 +132,4 @@ Local only, gitignored (`model_artifacts/*`) — not committed, not yet in an ar
 - `credit-risk-v1-validation-report.json` — full metrics (this document quotes the headline numbers).
 - `credit-risk-v1-data-quality-report.json` — per-column profile, all 122 columns (see "Data quality and leakage checks").
 - `credit-risk-v1-leakage-report.json` — split-overlap check + advisory correlation/column-name scans (see "Data quality and leakage checks").
+- `credit-risk-v1-fairness-report.json` — Fairlearn demographic parity / equalized odds (see "Fairness evaluation" above).

@@ -17,6 +17,7 @@ from ml.data import feature_columns, load_csv, stratified_split
 from ml.data_quality import profile as profile_data_quality
 from ml.evaluate import evaluate
 from ml.explain import run_shap_fidelity_check
+from ml.fairness import evaluate_fairness
 from ml.leakage import run_leakage_checks
 from ml.train import save_pipeline, train_logistic_regression, train_xgboost
 
@@ -92,6 +93,16 @@ def main() -> None:
     shap_sample = holdout_df.sample(n=min(500, len(holdout_df)), random_state=config.RANDOM_SEED)
     shap_check = run_shap_fidelity_check(xgboost_pipeline, shap_sample, numeric_columns, categorical_columns)
 
+    fairness_report = evaluate_fairness(
+        xgboost_pipeline, holdout_df, numeric_columns, categorical_columns,
+        config.TARGET_COLUMN, config.PROTECTED_ATTRIBUTE_COLUMN,
+    )
+    config.FAIRNESS_REPORT_PATH.write_text(json.dumps(fairness_report, indent=2))
+    print(
+        "fairness (holdout): "
+        + ", ".join(f"{m['metric_name']}={m['metric_value']}" for m in fairness_report["metrics"])
+    )
+
     save_pipeline(xgboost_pipeline, config.MODEL_PATH)
     save_pipeline(logistic_pipeline, config.BASELINE_MODEL_PATH)
 
@@ -120,6 +131,7 @@ def main() -> None:
         "xgboost_validation": xgboost_val_metrics,
         "xgboost_holdout": xgboost_holdout_metrics,
         "shap_fidelity_check": shap_check,
+        "fairness_holdout": fairness_report,
     }
 
     config.METADATA_PATH.write_text(json.dumps(metadata, indent=2))
