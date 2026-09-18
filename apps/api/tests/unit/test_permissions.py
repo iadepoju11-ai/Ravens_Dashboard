@@ -40,10 +40,22 @@ def _identity(*roles: str) -> Identity:
         (ADMIN, "decisions:read"),
         (ADMIN, "audit:read"),
         (ADMIN, "fairness:read"),
+        (ADMIN, "monitoring:read"),
+        (COMPLIANCE_OFFICER, "datasets:read"),
+        (COMPLIANCE_OFFICER, "datasets:create"),
+        (COMPLIANCE_OFFICER, "monitoring:read"),
     ],
 )
 def test_role_has_its_own_permissions(role, permission):
     assert has_permission(_identity(role), permission)
+
+
+@pytest.mark.parametrize("role", [ADMIN, CREDIT_ANALYST, COMPLIANCE_OFFICER, AUDITOR, DATA_PROTECTION_OFFICER])
+def test_every_role_can_read_its_own_tenant(role):
+    # tenant:read carries no cross-tenant risk (see app/api/v1/tenants.py)
+    # -- it's the one permission every role holds, unlike everything else
+    # in this file, which is deliberately scoped to one workflow.
+    assert has_permission(_identity(role), "tenant:read")
 
 
 def test_admin_has_read_only_dashboard_visibility_not_write_permissions():
@@ -64,6 +76,10 @@ def test_admin_has_read_only_dashboard_visibility_not_write_permissions():
         (AUDITOR, "decisions:create"),
         (COMPLIANCE_OFFICER, "decisions:create"),
         (DATA_PROTECTION_OFFICER, "decisions:create"),
+        (CREDIT_ANALYST, "monitoring:read"),
+        (AUDITOR, "monitoring:read"),
+        (DATA_PROTECTION_OFFICER, "datasets:create"),
+        (CREDIT_ANALYST, "datasets:create"),
     ],
 )
 def test_role_does_not_have_other_roles_permissions(role, permission):

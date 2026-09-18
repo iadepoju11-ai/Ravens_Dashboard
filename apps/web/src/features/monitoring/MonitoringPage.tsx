@@ -4,15 +4,13 @@ import { fetchMetrics, fetchRecentAlerts } from "@/features/overview/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { useIdentity } from "@/services/useIdentity";
 
-// Not yet migrated to OIDC auth (see docs/architecture/oidc-rbac.md) --
-// reuses the Overview page's fetchers, which already send both
-// accessToken and tenantId; this endpoint only honours tenantId today.
+// Migrated to OIDC auth (monitoring:read -- see docs/architecture/oidc-rbac.md).
+// Reuses the Overview page's fetchers.
 export function MonitoringPage() {
-  const { accessToken, tenantId } = useIdentity();
-  const auth = { accessToken, tenantId };
+  const { accessToken } = useIdentity();
 
-  const metricsState = useApiResource(() => fetchMetrics(auth), [accessToken, tenantId]);
-  const alertsState = useApiResource(() => fetchRecentAlerts(auth), [accessToken, tenantId], {
+  const metricsState = useApiResource(() => fetchMetrics(accessToken), [accessToken]);
+  const alertsState = useApiResource(() => fetchRecentAlerts(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
 

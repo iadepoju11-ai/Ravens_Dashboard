@@ -1,11 +1,11 @@
-"""Proves the second batch of OIDC-migrated endpoints (CHECKLIST.md Phase
-6) -- /decisions, /models, /fairness, /audit -- actually enforce
-authentication and permission the same way POST /score does (see
-tests/integration/test_score_authorization.py for that one in detail,
-and docs/architecture/oidc-rbac.md for the pattern). This file checks the
-mechanical 401/403 cases across all of them in one pass, plus a couple of
-hand-picked cross-tenant checks for the state-changing model lifecycle
-endpoints.
+"""Proves every OIDC-migrated endpoint (CHECKLIST.md Phase 6) --
+/decisions, /models, /fairness, /audit, /datasets, /monitoring, /tenants
+-- actually enforces authentication and permission the same way
+POST /score does (see tests/integration/test_score_authorization.py for
+that one in detail, and docs/architecture/oidc-rbac.md for the pattern).
+This file checks the mechanical 401/403 cases across all of them in one
+pass, plus a couple of hand-picked cross-tenant checks for the
+state-changing model lifecycle endpoints.
 """
 
 import pytest
@@ -49,11 +49,29 @@ _PROTECTED_ROUTES = [
     ("GET", "/api/v1/audit/events/00000000-0000-0000-0000-000000000000/verify", "credit_analyst"),
     ("GET", "/api/v1/audit/integrity-status", "credit_analyst"),
     ("GET", "/api/v1/audit/verify-chain", "credit_analyst"),
+    ("GET", "/api/v1/datasets", "credit_analyst"),
+    ("POST", "/api/v1/datasets", "credit_analyst"),
+    ("GET", "/api/v1/monitoring/metrics", "credit_analyst"),
+    ("GET", "/api/v1/monitoring/alerts", "credit_analyst"),
+]
+
+# tenant:read is deliberately granted to all five roles (reading your own
+# tenant carries no cross-tenant risk -- see app/api/v1/tenants.py), so
+# there's no "wrong role" case for it, only "no token at all".
+_AUTHENTICATED_ONLY_ROUTES = [
+    ("GET", "/api/v1/tenants"),
+    ("GET", "/api/v1/tenants/00000000-0000-0000-0000-000000000000"),
 ]
 
 
 @pytest.mark.parametrize(("method", "path", "insufficient_role"), _PROTECTED_ROUTES)
 def test_missing_token_is_rejected(client, method, path, insufficient_role):
+    response = client.open(path, method=method, json={})
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(("method", "path"), _AUTHENTICATED_ONLY_ROUTES)
+def test_authenticated_only_route_still_requires_a_token(client, method, path):
     response = client.open(path, method=method, json={})
     assert response.status_code == 401
 
@@ -101,3 +119,21 @@ def test_auditor_cannot_read_another_tenants_audit_events(client, app, auth_head
     )
     assert response.status_code == 200
     assert response.get_json()["events"] == []
+
+
+def test_compliance_officer_cannot_see_another_tenants_datasets(client, app, auth_headers):
+    tenant_a, _ = _create_tenant_with_deployed_model("datasets-tenant-a")
+    tenant_b, _ = _create_tenant_with_deployed_model("datasets-tenant-b")
+
+    client.post(
+        "/api/v1/datasets",
+        json={"name": "home-credit", "version": "v1", "uri": "s3://x"},
+        headers=auth_headers(tenant_b.id, roles=("compliance_officer",), sub="officer-b"),
+    )
+
+    response = client.get(
+        "/api/v1/datasets",
+        headers=auth_headers(tenant_a.id, roles=("compliance_officer",), sub="officer-a"),
+    )
+    assert response.status_code == 200
+    assert response.get_json()["datasets"] == []

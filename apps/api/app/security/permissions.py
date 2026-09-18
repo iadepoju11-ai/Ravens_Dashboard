@@ -26,6 +26,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         {
             "users:manage",
             "tenant:manage",
+            "tenant:read",
             # Read-only visibility across the tenant's operational data --
             # discovered as a real gap while building the Overview
             # dashboard (apps/web): it needs decisions:read + audit:read +
@@ -38,12 +39,14 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "decisions:read",
             "audit:read",
             "fairness:read",
+            "monitoring:read",
         }
     ),
     CREDIT_ANALYST: frozenset(
         {
             "decisions:create",
             "decisions:read",
+            "tenant:read",
         }
     ),
     COMPLIANCE_OFFICER: frozenset(
@@ -53,12 +56,20 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             # No dedicated data-scientist/model-ops role exists among the
             # five CreditGuard roles -- compliance_officer owns the whole
             # model lifecycle (register -> approve -> deploy) for now,
-            # not just the approval step. Revisit if that changes.
+            # not just the approval step. Revisit if that changes. Same
+            # reasoning extends to registering the training data those
+            # models cite (datasets:create/read), and to model-risk
+            # monitoring (monitoring:read) -- both are part of "Models,
+            # governance and fairness", this role's stated remit.
             "models:create",
             "models:approve",
             "models:deploy",
+            "datasets:read",
+            "datasets:create",
+            "monitoring:read",
             "fairness:read",
             "fairness:review",
+            "tenant:read",
         }
     ),
     AUDITOR: frozenset(
@@ -66,12 +77,14 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "audit:read",
             "audit:export",
             "audit:verify",
+            "tenant:read",
         }
     ),
     DATA_PROTECTION_OFFICER: frozenset(
         {
             "datasets:read",
             "audit:read",
+            "tenant:read",
         }
     ),
 }

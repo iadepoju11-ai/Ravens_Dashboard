@@ -1,16 +1,21 @@
 from flask import Blueprint, jsonify, request
 
 from app.extensions import db
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.dataset import Dataset, DatasetVersion
+from app.security.authentication import authenticate
+from app.security.permissions import require_permission
 
 bp = Blueprint("datasets", __name__)
 
 
 @bp.get("/datasets")
 def list_datasets():
+    identity = authenticate()
+    require_permission(identity, "datasets:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -27,8 +32,11 @@ def list_datasets():
 def register_dataset():
     """Registers a dataset version, creating the parent logical Dataset
     (identified by tenant + name) on first use."""
+    identity = authenticate()
+    require_permission(identity, "datasets:create")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 

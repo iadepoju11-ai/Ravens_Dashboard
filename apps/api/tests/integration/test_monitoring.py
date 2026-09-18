@@ -10,10 +10,12 @@ def _create_tenant(slug: str) -> Tenant:
     return tenant
 
 
-def test_metrics_report_no_data_explicitly_rather_than_zero(client, app):
+def test_metrics_report_no_data_explicitly_rather_than_zero(client, app, auth_headers):
     tenant = _create_tenant("monitoring-empty-bank")
 
-    response = client.get("/api/v1/monitoring/metrics", headers={"X-Tenant-Id": tenant.id})
+    response = client.get(
+        "/api/v1/monitoring/metrics", headers=auth_headers(tenant.id, roles=("compliance_officer",))
+    )
 
     assert response.status_code == 200
     metrics = response.get_json()["metrics"]
@@ -38,19 +40,21 @@ def test_metrics_report_approval_rate_and_current_model_version(client, app, aut
     db.session.add(model_version)
     db.session.commit()
 
-    headers = auth_headers(tenant.id)
+    analyst_headers = auth_headers(tenant.id, roles=("credit_analyst",), sub="analyst-1")
     client.post(
         "/api/v1/score",
         json={"application_reference": "APP-1", "features": {"income": 0.1}, "request_id": "req-1"},
-        headers=headers,
+        headers=analyst_headers,
     )
     client.post(
         "/api/v1/score",
         json={"application_reference": "APP-2", "features": {"income": 0.9}, "request_id": "req-2"},
-        headers=headers,
+        headers=analyst_headers,
     )
 
-    response = client.get("/api/v1/monitoring/metrics", headers={"X-Tenant-Id": tenant.id})
+    response = client.get(
+        "/api/v1/monitoring/metrics", headers=auth_headers(tenant.id, roles=("compliance_officer",), sub="officer-1")
+    )
 
     metrics = response.get_json()["metrics"]
     assert metrics["decision_count"] == 2

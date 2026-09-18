@@ -14,27 +14,26 @@ import {
 
 export function OverviewPage() {
   // App.tsx only ever renders this page once useIdentity().isAuthenticated
-  // is true, so accessToken/tenantId are assumed present here -- no
-  // "please log in" branch needed at this level.
-  const { accessToken, tenantId } = useIdentity();
-  const auth = { accessToken, tenantId };
+  // is true, so accessToken is assumed present here -- no "please log in"
+  // branch needed at this level.
+  const { accessToken } = useIdentity();
 
   // Metrics itself is never "empty" — decision_count really can be 0,
   // which is a fact, not a failure; approval_rate/current_model_version
   // being null (also a fact — "no data yet") is handled per-card below,
   // not by hiding the whole section.
-  const metricsState = useApiResource(() => fetchMetrics(auth), [accessToken, tenantId]);
-  const decisionsState = useApiResource(() => fetchRecentDecisions(auth), [accessToken, tenantId], {
+  const metricsState = useApiResource(() => fetchMetrics(accessToken), [accessToken]);
+  const decisionsState = useApiResource(() => fetchRecentDecisions(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
-  const alertsState = useApiResource(() => fetchRecentAlerts(auth), [accessToken, tenantId], {
+  const alertsState = useApiResource(() => fetchRecentAlerts(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
-  const integrityState = useApiResource(() => fetchIntegrityStatus(auth), [accessToken, tenantId], {
+  const integrityState = useApiResource(() => fetchIntegrityStatus(accessToken), [accessToken], {
     isEmpty: (data) => data === null,
   });
   const healthState = useApiResource(() => fetchApiHealth(), []);
-  const fairnessState = useApiResource(() => fetchFairnessReports(auth), [accessToken, tenantId], {
+  const fairnessState = useApiResource(() => fetchFairnessReports(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
 

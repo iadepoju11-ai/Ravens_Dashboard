@@ -6,8 +6,8 @@ import { useIdentity } from "@/services/useIdentity";
 import { fetchDatasets, registerDataset } from "./api";
 
 export function DatasetsPage() {
-  const { tenantId } = useIdentity();
-  const datasetsState = useApiResource(() => fetchDatasets(tenantId), [tenantId], {
+  const { accessToken } = useIdentity();
+  const datasetsState = useApiResource(() => fetchDatasets(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
 
@@ -18,7 +18,7 @@ export function DatasetsPage() {
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    void registerMutation.run(tenantId, { name, version, uri }).then((result) => {
+    void registerMutation.run(accessToken, { name, version, uri }).then((result) => {
       if (result) {
         setName("");
         setVersion("");

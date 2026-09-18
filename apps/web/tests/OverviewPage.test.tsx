@@ -13,7 +13,6 @@ vi.mock("@/services/useIdentity", () => ({
     isLoading: false,
     isAuthenticated: true,
     accessToken: "test-access-token",
-    tenantId: "tenant-123",
     email: "analyst@example.com",
     login: vi.fn(),
     logout: vi.fn(),

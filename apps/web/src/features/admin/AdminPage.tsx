@@ -8,8 +8,8 @@ import { fetchOwnTenant } from "./api";
 // purpose -- see its docstring). This shows that one real thing rather
 // than a fake CRUD UI with nothing behind it.
 export function AdminPage() {
-  const { tenantId, email } = useIdentity();
-  const tenantState = useApiResource(() => fetchOwnTenant(tenantId), [tenantId]);
+  const { accessToken, email } = useIdentity();
+  const tenantState = useApiResource(() => fetchOwnTenant(accessToken), [accessToken]);
 
   return (
     <div className="admin-page">

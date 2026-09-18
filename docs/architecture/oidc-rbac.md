@@ -1,9 +1,9 @@
 # OIDC authentication & permission-based authorization
 
 CHECKLIST.md Phase 6 ("Authentication + RBAC"). Started as one endpoint
-(`POST /score`) to prove the pattern; now covers scoring, decisions,
-models, fairness, and audit, plus a real login flow in the React app
-(Overview page only so far).
+(`POST /score`) to prove the pattern; every API endpoint is now migrated
+(scoring, decisions, models, fairness, audit, datasets, monitoring,
+tenants), and the React app has a real login flow with every page built.
 
 ## The identity boundary
 
@@ -45,29 +45,42 @@ model later is a change to one dict, not a grep across every route.
 
 | Role | Permissions |
 | --- | --- |
-| `admin` | `users:manage`, `tenant:manage`, `decisions:read`, `audit:read`, `fairness:read` |
-| `credit_analyst` | `decisions:create`, `decisions:read` |
-| `compliance_officer` | `decisions:read`, `models:read`, `models:create`, `models:approve`, `models:deploy`, `fairness:read`, `fairness:review` |
-| `auditor` | `audit:read`, `audit:export`, `audit:verify` |
-| `data_protection_officer` | `datasets:read`, `audit:read` |
+| `admin` | `users:manage`, `tenant:manage`, `tenant:read`, `decisions:read`, `audit:read`, `fairness:read`, `monitoring:read` |
+| `credit_analyst` | `decisions:create`, `decisions:read`, `tenant:read` |
+| `compliance_officer` | `decisions:read`, `models:read`, `models:create`, `models:approve`, `models:deploy`, `datasets:read`, `datasets:create`, `monitoring:read`, `fairness:read`, `fairness:review`, `tenant:read` |
+| `auditor` | `audit:read`, `audit:export`, `audit:verify`, `tenant:read` |
+| `data_protection_officer` | `datasets:read`, `audit:read`, `tenant:read` |
 
 `compliance_officer` owns the whole model lifecycle (`models:create` and
 `models:deploy`, not just `models:approve`) because no dedicated data-
 scientist/model-ops role exists among the five CreditGuard roles —
-revisit if that changes. `audit:read` vs `audit:verify` is a real split,
-not a naming accident: `/audit/events` and `/audit/integrity-status` only
-*read* recorded state (`audit:read`, also granted to
-`data_protection_officer`), while `/audit/events/<id>/verify` and
-`/audit/verify-chain` actually *run* a fresh integrity check and persist
-its result (`audit:verify`, `auditor` only).
+revisit if that changes. The same reasoning extends to the training data
+those models cite (`datasets:read`/`datasets:create`) and to model-risk
+monitoring (`monitoring:read`): both fall under "Models, governance and
+fairness", this role's stated remit. `audit:read` vs `audit:verify` is a
+real split, not a naming accident: `/audit/events` and
+`/audit/integrity-status` only *read* recorded state (`audit:read`, also
+granted to `data_protection_officer`), while `/audit/events/<id>/verify`
+and `/audit/verify-chain` actually *run* a fresh integrity check and
+persist its result (`audit:verify`, `auditor` only).
 
-`admin`'s three read permissions were added while building the real
-Overview page (below): it needs `decisions:read` + `audit:read` +
-`fairness:read` together, and no other single role holds all three (each
+`admin`'s read permissions were added while building the real Overview
+page: it needs `decisions:read` + `audit:read` + `fairness:read` +
+`monitoring:read` together, and no other single role holds all four (each
 is deliberately scoped to its own workflow). An administrator overseeing
 a tenant reasonably needs to see the same dashboard, without gaining any
 of the *write* permissions those roles carry — `admin` still cannot
-create a decision, approve a model, or verify the audit chain.
+create a decision, approve a model, or verify the audit chain. Notably,
+`admin` does **not** have `datasets:read` — dataset visibility stayed
+scoped to `compliance_officer`/`data_protection_officer`, since nothing
+in the Overview dashboard needed it; extend this only if a real need
+shows up, not preemptively.
+
+`tenant:read` is the one permission every role holds: `GET /tenants` and
+`GET /tenants/<id>` (`app/api/v1/tenants.py`) only ever return the
+caller's own tenant — no role in this application is a cross-tenant
+platform administrator — so reading it carries no cross-tenant risk and
+isn't restricted further.
 
 The pre-existing `roles`/`user_roles` tables (`app/models/role.py`) predate
 this design and stay schema-only for now — they were never wired to
@@ -105,16 +118,21 @@ header-based pattern) needs one.
 | `GET /fairness/reports`, `GET /fairness/reports/<id>` | `fairness:read` |
 | `GET /audit/events`, `GET /audit/integrity-status` | `audit:read` |
 | `GET /audit/events/<id>/verify`, `GET /audit/verify-chain` | `audit:verify` |
+| `GET /datasets` | `datasets:read` |
+| `POST /datasets` | `datasets:create` |
+| `GET /monitoring/metrics`, `GET /monitoring/alerts` | `monitoring:read` |
+| `GET /tenants`, `GET /tenants/<id>` | `tenant:read` |
 
 Approving and deploying a model version now also record who did it —
 `ModelVersion.approved_by`/`ModelDeployment.deployed_by` are set from
 `identity.user_id`, which was impossible before this workstream (there
 was no authenticated user to attribute either action to).
 
-`/datasets`, `/monitoring/*`, and `/tenants` are unchanged and still trust
-the `X-Tenant-Id` header (`app/infrastructure/security/tenant_context.py`)
-— not named in this phase's scope; migrate them the same way if/when
-they need it.
+Every API endpoint is migrated now, so the header-based `resolve_tenant()`
+(`app/infrastructure/security/tenant_context.py`) had no remaining
+callers — deleted, rather than left in place as unused code. Only
+`resolve_tenant_by_id()` remains, taking an already-verified `tenant_id`
+(an `Identity`'s, never a header).
 
 ## Frontend (apps/web)
 

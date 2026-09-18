@@ -87,11 +87,12 @@ def test_register_model_version_rejects_unknown_training_dataset_version(client,
 
 def test_register_model_version_links_a_real_dataset_version(client, app, auth_headers):
     tenant = _create_tenant("model-registration-dataset-link-bank")
+    headers = auth_headers(tenant.id, roles=("compliance_officer",))
 
     dataset_response = client.post(
         "/api/v1/datasets",
         json={"name": "home-credit-application", "version": "kaggle-home-credit-default-risk", "uri": "s3://x"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=headers,
     )
     assert dataset_response.status_code == 201
     dataset_version_id = dataset_response.get_json()["version"]["id"]
@@ -104,7 +105,7 @@ def test_register_model_version_links_a_real_dataset_version(client, app, auth_h
             "artifact_uri": "file://./does-not-matter.pkl",
             "training_dataset_version_id": dataset_version_id,
         },
-        headers=auth_headers(tenant.id, roles=("compliance_officer",)),
+        headers=headers,
     )
     assert model_response.status_code == 201
 
@@ -160,6 +161,7 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
     tenant = _create_tenant("real-model-bank")
     metadata = json.loads(Path(METADATA_PATH).read_text())
 
+    model_headers = auth_headers(tenant.id, roles=("compliance_officer",))
     dataset_response = client.post(
         "/api/v1/datasets",
         json={
@@ -168,12 +170,10 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
             "uri": metadata["dataset"]["source_file"],
             "row_count": metadata["dataset"]["n_rows"],
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=model_headers,
     )
     assert dataset_response.status_code == 201
     dataset_version_id = dataset_response.get_json()["version"]["id"]
-
-    model_headers = auth_headers(tenant.id, roles=("compliance_officer",))
     register_response = client.post(
         "/api/v1/models",
         json={

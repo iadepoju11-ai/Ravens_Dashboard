@@ -282,6 +282,18 @@ clean up after themselves (see `test_db_permissions.py`'s and
 explicit teardown) so the suite stays repeatable across runs without
 `docker compose down -v` in between.
 
+**One test is the exception, and it's a big one**: `test_migrations.py`
+downgrades the entire database to `base` (dropping every table) and back
+to `head` as part of what it verifies. Running the full suite therefore
+wipes *all* data in that Postgres instance — any tenant, user, model, or
+decision you created by hand (e.g. to click through the React app) is
+gone afterward, not just test fixtures. This is correct and necessary for
+what that test checks; it just means "run the full test suite" and "keep
+manually-created demo data around" don't mix on the same Postgres
+instance. Re-seed whatever you need afterward (see "OIDC authentication"
+above for the tenant/user creation recipe), or point `MIGRATION_TEST_DATABASE_URL`
+at a separate, disposable database if you want to avoid this entirely.
+
 ## Running outside Docker
 
 If your local Python has a working `psycopg2` install (e.g. Python 3.12 on

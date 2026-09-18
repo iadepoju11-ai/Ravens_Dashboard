@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatasetsPage } from "@/features/datasets/DatasetsPage";
 
 vi.mock("@/services/useIdentity", () => ({
-  useIdentity: () => ({ accessToken: "test-access-token", tenantId: "tenant-123" }),
+  useIdentity: () => ({ accessToken: "test-access-token" }),
 }));
 
 function jsonResponse(body: unknown) {
@@ -13,12 +13,12 @@ function jsonResponse(body: unknown) {
 describe("DatasetsPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("uses the X-Tenant-Id header, since this endpoint isn't OIDC-migrated yet", async () => {
+  it("authorizes via the bearer token, now that this endpoint is OIDC-migrated", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((_url: string, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Tenant-Id")).toBe("tenant-123");
+        expect(headers.get("Authorization")).toBe("Bearer test-access-token");
         return jsonResponse({
           datasets: [
             {

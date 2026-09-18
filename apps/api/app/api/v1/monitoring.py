@@ -1,17 +1,22 @@
 from flask import Blueprint, jsonify
 
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.decision import Decision
 from app.models.model import Model, ModelVersion
 from app.models.monitoring import MonitoringAlert
+from app.security.authentication import authenticate
+from app.security.permissions import require_permission
 
 bp = Blueprint("monitoring", __name__)
 
 
 @bp.get("/monitoring/metrics")
 def get_metrics():
+    identity = authenticate()
+    require_permission(identity, "monitoring:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
@@ -51,8 +56,11 @@ def get_metrics():
 
 @bp.get("/monitoring/alerts")
 def list_alerts():
+    identity = authenticate()
+    require_permission(identity, "monitoring:read")
+
     try:
-        tenant = resolve_tenant()
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 

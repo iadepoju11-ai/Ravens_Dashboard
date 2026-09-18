@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminPage } from "@/features/admin/AdminPage";
 
 vi.mock("@/services/useIdentity", () => ({
-  useIdentity: () => ({ tenantId: "tenant-123", email: "admin@example.com" }),
+  useIdentity: () => ({ accessToken: "test-access-token", email: "admin@example.com" }),
 }));
 
 function jsonResponse(body: unknown) {
