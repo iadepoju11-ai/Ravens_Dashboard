@@ -139,23 +139,52 @@ docker compose exec kafka kafka-console-consumer --bootstrap-server localhost:90
 
 ## OIDC authentication (Keycloak)
 
-`POST /score` is the first endpoint migrated to OIDC auth (CHECKLIST.md
-Phase 6, `docs/architecture/oidc-rbac.md`) — everything else still uses
-the `X-Tenant-Id` header. `docker compose up` starts a `keycloak` service
-that auto-imports `infra/keycloak/creditguard-realm.json` on first boot
-(the realm, its five roles, and the `creditguard-api` client with the
-protocol mappers that put `tenant_id` and an `aud: creditguard-api` claim
-on every access token).
+`POST /score`, `/decisions`, `/models`, `/fairness/reports`, and `/audit`
+are migrated to OIDC auth (CHECKLIST.md Phase 6,
+`docs/architecture/oidc-rbac.md`) — `/datasets`, `/monitoring/*`,
+`/tenants` still use the `X-Tenant-Id` header. `docker compose up` starts
+a `keycloak` service that auto-imports
+`infra/keycloak/creditguard-realm.json` on first boot: the realm, its
+five roles, and two clients --
 
-`OIDC_ISSUER`/`OIDC_JWKS_URL` (`apps/api/app/config.py`) point at the
-*internal* Docker address (`keycloak:8080`), since that's what the token
-the api service actually receives was issued against — not the host-side
-port below. Getting a token for manual testing therefore has to happen
-from *inside* the Docker network too (`docker compose exec api python
-...`, or `kcadm.sh` inside the `keycloak` container itself), not from a
-browser hitting `localhost:8081`.
+- **`creditguard-api`** — `directAccessGrantsEnabled`, for scripts/curl
+  (the manual-testing recipe below). Never used by a browser.
+- **`creditguard-web`** — `standardFlowEnabled` + PKCE, for the actual
+  React app (`apps/web/src/services/authConfig.ts`). Never issued a
+  client secret; it's a public SPA client by design.
 
-To create a test user and get a real token:
+Both carry the same protocol mappers: a `tenant_id` claim (from a user
+attribute) and an `aud: creditguard-api` claim, so a token from either
+client is valid against the API.
+
+### One issuer, two network paths
+
+A browser (`localhost:8081`) and the `api` container (which cannot resolve
+`localhost:8081` to Keycloak) reach Keycloak differently, but a JWT's
+`iss` claim is fixed at issuance and must match exactly on validation.
+Keycloak is pinned via `KC_HOSTNAME=localhost`/`KC_HOSTNAME_PORT=8081`
+(`docker-compose.yml`) to always claim `http://localhost:8081/realms/...`
+as its issuer, regardless of which path asked — and the `api` service's
+`OIDC_ISSUER` is set to that same string. Only the *JWKS fetch* address
+needs to differ: `OIDC_JWKS_URL` points at
+`http://host.docker.internal:8081/...`, which Docker Desktop resolves to
+the host machine (an `extra_hosts` entry makes the same alias work on
+Linux). If you ever see the API reject a token as invalid right after
+changing anything Keycloak-related, check `OIDC_ISSUER` still matches
+`http://localhost:8081/realms/creditguard` exactly.
+
+### Using the real login flow (the React app)
+
+`docker compose up web` (or `npm run dev` in `apps/web`) needs
+`VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID`, `VITE_OIDC_REDIRECT_URI`
+(`.env.example` has working defaults). Visiting `http://localhost:5173`
+redirects to Keycloak's real login page; nothing renders until
+`useIdentity().isAuthenticated` is true (`apps/web/src/app/AuthGate.tsx`).
+You need a real Keycloak user with a `tenant_id` attribute pointing at a
+real row in the `tenants` table — create one with the same `kcadm.sh`
+recipe below, then log in with it in the browser.
+
+### Manual testing recipe (curl/scripts, not the browser)
 
 ```
 # Admin console: http://localhost:8081 (admin/admin — dev-only creds)
@@ -174,18 +203,29 @@ docker compose exec keycloak /opt/keycloak/bin/kcadm.sh set-password -r creditgu
 docker compose exec keycloak /opt/keycloak/bin/kcadm.sh add-roles -r creditguard \
   --uusername test-analyst --rolename credit_analyst
 
-# Then, from inside the Docker network (e.g. `docker compose exec api python`):
-#   POST http://keycloak:8080/realms/creditguard/protocol/openid-connect/token
-#   grant_type=password&client_id=creditguard-api&username=test-analyst&password=test-pass-123
-# and use the returned access_token as `Authorization: Bearer <token>` against
-# http://localhost:5000/api/v1/score (or from inside the api container,
-# http://localhost:5000, since gunicorn binds there too).
+# From the host (this is the direct-grant creditguard-api client, not PKCE):
+curl -s -X POST http://localhost:8081/realms/creditguard/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=creditguard-api \
+  -d username=test-analyst -d password=test-pass-123
+# use the returned access_token as `Authorization: Bearer <token>` against
+# http://localhost:5000/api/v1/score
 ```
 
 (On Windows/Git Bash, prefix `docker compose exec` commands above with
 `MSYS_NO_PATHCONV=1` — otherwise Git Bash rewrites the container's
 `/opt/keycloak/...` path as a Windows path and the command fails with
 "no such file or directory".)
+
+### Gotcha: a long-running `api` container can end up with a stale DB connection
+
+Rebuilding the `creditguard_app` Postgres role (e.g. by running
+`tests/test_migrations.py`'s base→head cycle against the same Postgres a
+persistent `api` container is also connected to — see
+`docs/database-migrations.md`) can leave that container's pooled
+connection stale: it starts failing with `permission denied for table
+...` even though the grants are actually fine. `docker compose restart
+api` clears it. Not a bug, just a consequence of a schema-destructive test
+suite and a long-running app sharing one database.
 
 ### Two Keycloak gotchas this realm config already works around
 

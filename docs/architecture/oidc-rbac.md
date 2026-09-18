@@ -2,7 +2,8 @@
 
 CHECKLIST.md Phase 6 ("Authentication + RBAC"). Started as one endpoint
 (`POST /score`) to prove the pattern; now covers scoring, decisions,
-models, fairness, and audit.
+models, fairness, and audit, plus a real login flow in the React app
+(Overview page only so far).
 
 ## The identity boundary
 
@@ -10,7 +11,7 @@ models, fairness, and audit.
 OIDC provider (Keycloak locally; any OIDC-compliant IdP in production)
      │  issues a signed access token
      ▼
-Client (curl/tests today; the React app later)
+React app (apps/web) -- Authorization Code + PKCE
      │  Authorization: Bearer <token>
      ▼
 Flask API — app/security/
@@ -44,7 +45,7 @@ model later is a change to one dict, not a grep across every route.
 
 | Role | Permissions |
 | --- | --- |
-| `admin` | `users:manage`, `tenant:manage` |
+| `admin` | `users:manage`, `tenant:manage`, `decisions:read`, `audit:read`, `fairness:read` |
 | `credit_analyst` | `decisions:create`, `decisions:read` |
 | `compliance_officer` | `decisions:read`, `models:read`, `models:create`, `models:approve`, `models:deploy`, `fairness:read`, `fairness:review` |
 | `auditor` | `audit:read`, `audit:export`, `audit:verify` |
@@ -59,6 +60,14 @@ not a naming accident: `/audit/events` and `/audit/integrity-status` only
 `data_protection_officer`), while `/audit/events/<id>/verify` and
 `/audit/verify-chain` actually *run* a fresh integrity check and persist
 its result (`audit:verify`, `auditor` only).
+
+`admin`'s three read permissions were added while building the real
+Overview page (below): it needs `decisions:read` + `audit:read` +
+`fairness:read` together, and no other single role holds all three (each
+is deliberately scoped to its own workflow). An administrator overseeing
+a tenant reasonably needs to see the same dashboard, without gaining any
+of the *write* permissions those roles carry — `admin` still cannot
+create a decision, approve a model, or verify the audit chain.
 
 The pre-existing `roles`/`user_roles` tables (`app/models/role.py`) predate
 this design and stay schema-only for now — they were never wired to
@@ -106,6 +115,44 @@ was no authenticated user to attribute either action to).
 the `X-Tenant-Id` header (`app/infrastructure/security/tenant_context.py`)
 — not named in this phase's scope; migrate them the same way if/when
 they need it.
+
+## Frontend (apps/web)
+
+Real login only, Overview page only — the other stub pages
+(`NotYetBuiltPage`) are unchanged. Authorization Code + PKCE against the
+`creditguard-web` Keycloak client (public, no secret, browser-appropriate
+— never the password/direct grant used for manual API testing), via
+`react-oidc-context`:
+
+- `src/services/authConfig.ts` — the one place `react-oidc-context` is
+  configured; nothing else imports it directly.
+- `src/services/useIdentity.ts` — the one seam the rest of the app reads
+  identity through (`isAuthenticated`, `accessToken`, `tenantId`, `email`,
+  `login`/`logout`), same shape as the backend's `get_current_identity()`.
+  `tenantId` here is informational only (populates the `X-Tenant-Id`
+  header the few not-yet-migrated endpoints still need) — it is never
+  what makes the backend trust a tenant; the backend derives that itself
+  from the verified access token, same as always.
+- `src/app/AuthGate.tsx` — gates the whole app behind a real session
+  (loading / sign-in screen / error), so `OverviewPage` and everything
+  else under it can assume `isAuthenticated` is true and never has its
+  own "please log in" branch.
+- `apiClient.ts`'s `apiFetch` now sends both `Authorization: Bearer` (for
+  migrated endpoints) and `X-Tenant-Id` (for the ones that still need it)
+  on every call — harmless for either side to receive the one it ignores.
+
+Verified as an actual Authorization Code + PKCE round trip, not just unit
+tests against a mocked identity: no browser automation is available in
+this environment, so the verification script drove the real HTTP flow
+instead (build a PKCE challenge, hit Keycloak's real `/auth` endpoint,
+submit the real login form, capture the redirect's authorization code,
+exchange it at the real `/token` endpoint, then call the real API with
+the resulting access token) — this is the exact protocol sequence
+`oidc-client-ts` performs internally, just scripted instead of clicked.
+It came back clean: correct `iss`/`aud`/`tenant_id`/roles on the issued
+token, and a real 200 from `GET /decisions`. A human still needs to
+click through the actual browser UX at least once — that part is not
+substitutable.
 
 ## Testing approach
 

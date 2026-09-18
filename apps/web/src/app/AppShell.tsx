@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { useTenant } from "@/services/useTenant";
+import { useIdentity } from "@/services/useIdentity";
 
 const NAV_ITEMS = [
   { to: "/", label: "Overview", end: true },
@@ -14,7 +14,7 @@ const NAV_ITEMS = [
 ];
 
 export function AppShell() {
-  const { tenantId, setTenantId } = useTenant();
+  const { email, logout } = useIdentity();
 
   return (
     <div className="app-shell">
@@ -32,15 +32,11 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
-        <div className="app-shell__tenant">
-          <label htmlFor="dev-tenant-id">Tenant ID (dev only, no auth yet)</label>
-          <input
-            id="dev-tenant-id"
-            type="text"
-            value={tenantId}
-            onChange={(event) => setTenantId(event.target.value)}
-            placeholder="paste a tenant id"
-          />
+        <div className="app-shell__identity">
+          <span>{email ?? "Signed in"}</span>
+          <button type="button" onClick={logout}>
+            Sign out
+          </button>
         </div>
       </header>
       <main className="app-shell__content">

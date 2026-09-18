@@ -37,10 +37,23 @@ def _identity(*roles: str) -> Identity:
         (AUDITOR, "audit:verify"),
         (DATA_PROTECTION_OFFICER, "datasets:read"),
         (ADMIN, "tenant:manage"),
+        (ADMIN, "decisions:read"),
+        (ADMIN, "audit:read"),
+        (ADMIN, "fairness:read"),
     ],
 )
 def test_role_has_its_own_permissions(role, permission):
     assert has_permission(_identity(role), permission)
+
+
+def test_admin_has_read_only_dashboard_visibility_not_write_permissions():
+    # ADMIN can see what the Overview dashboard shows (decisions, audit,
+    # fairness) but must not gain the *write* permissions those roles
+    # carry just by virtue of being able to read the same data.
+    identity = _identity(ADMIN)
+    assert not has_permission(identity, "decisions:create")
+    assert not has_permission(identity, "audit:verify")
+    assert not has_permission(identity, "models:approve")
 
 
 @pytest.mark.parametrize(

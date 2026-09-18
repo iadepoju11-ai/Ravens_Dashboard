@@ -1,17 +1,29 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OverviewPage } from "@/features/overview/OverviewPage";
-import { TenantProvider } from "@/services/tenantContext";
 
-const TENANT_STORAGE_KEY = "creditguard.devTenantId";
+// OverviewPage only ever renders once App.tsx's AuthGate has confirmed a
+// real session (see docs/architecture/oidc-rbac.md) -- it reads identity
+// via useIdentity(), the one seam between this page and react-oidc-context,
+// so mocking that hook directly is enough; no AuthProvider/Keycloak needed
+// for this page's own tests.
+vi.mock("@/services/useIdentity", () => ({
+  useIdentity: () => ({
+    isLoading: false,
+    isAuthenticated: true,
+    accessToken: "test-access-token",
+    tenantId: "tenant-123",
+    email: "analyst@example.com",
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}));
 
 function renderOverview() {
   return render(
     <MemoryRouter>
-      <TenantProvider>
-        <OverviewPage />
-      </TenantProvider>
+      <OverviewPage />
     </MemoryRouter>,
   );
 }
@@ -41,7 +53,13 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
 
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string) => {
+    vi.fn((url: string, init?: RequestInit) => {
+      // Every request must carry the bearer token from useIdentity() --
+      // silently dropping it would be exactly the kind of regression
+      // this test suite exists to catch.
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer test-access-token");
+
       const match = Object.keys(responses).find((path) => url.includes(path));
       if (match) return jsonResponse(responses[match]);
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
@@ -50,21 +68,8 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
 }
 
 describe("OverviewPage", () => {
-  beforeEach(() => {
-    window.localStorage.setItem(TENANT_STORAGE_KEY, "tenant-123");
-  });
-
   afterEach(() => {
-    window.localStorage.removeItem(TENANT_STORAGE_KEY);
     vi.unstubAllGlobals();
-  });
-
-  it("prompts for a tenant id when none is set, instead of guessing one", () => {
-    window.localStorage.removeItem(TENANT_STORAGE_KEY);
-
-    renderOverview();
-
-    expect(screen.getByText(/enter a tenant id/i)).toBeInTheDocument();
   });
 
   it("renders real KPI data once every request resolves", async () => {

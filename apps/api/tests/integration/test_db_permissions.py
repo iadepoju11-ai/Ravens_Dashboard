@@ -37,6 +37,15 @@ from app.models.tenant import Tenant  # noqa: E402
 @pytest.fixture()
 def app_role_app():
     application = create_app("testing", database_uri=APP_DATABASE_URL)
+    # Must match the issuer/audience tests/conftest.py's make_token()/
+    # auth_headers() actually mint tokens with -- create_app("testing")
+    # alone would otherwise inherit this container's real OIDC_ISSUER env
+    # var (the host-side Keycloak address), which a fake test token was
+    # never issued for.
+    from tests.conftest import TEST_OIDC_AUDIENCE, TEST_OIDC_ISSUER
+
+    application.config["OIDC_ISSUER"] = TEST_OIDC_ISSUER
+    application.config["OIDC_AUDIENCE"] = TEST_OIDC_AUDIENCE
     with application.app_context():
         yield application
         _db.session.remove()

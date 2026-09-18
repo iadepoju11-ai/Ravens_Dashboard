@@ -44,16 +44,27 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      # A browser (localhost:8081) and the api container (keycloak:8080)
+      # reach Keycloak via *different* addresses -- without a fixed
+      # hostname, tokens issued via one path would carry an `iss` claim
+      # the other side can't validate. Pinning it to the host-side address
+      # makes every token's issuer http://localhost:8081/realms/creditguard
+      # regardless of which network path requested it; the api service's
+      # OIDC_ISSUER is set to match, and only its JWKS *fetch* address
+      # (OIDC_JWKS_URL, below) needs to be the container-reachable one.
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8081"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
     volumes:
       - ./infra/keycloak/creditguard-realm.json:/opt/keycloak/data/import/creditguard-realm.json
       - keycloak_data:/opt/keycloak/data
     ports:
-      # Host-side only, for the admin console / manual poking around
-      # (http://localhost:8081, login admin/admin -- dev credentials,
-      # never used outside this local stack). Container-to-container
-      # traffic (the api service validating tokens) always uses the
-      # internal address, keycloak:8080 -- see OIDC_ISSUER in
-      # docker-compose.yml's api service and docs/local-development.md.
+      # Host-side: the admin console, and now also every browser-facing
+      # OIDC flow (the React app's login redirect) -- both go through
+      # this port. See KC_HOSTNAME above for why the api container also
+      # needs to agree this is the issuer even though it reaches Keycloak
+      # over a different address.
       - "8081:8080"
 
   api:
@@ -77,6 +88,16 @@ services:
       # real permission checks rather than silently skipping them.
       APP_DATABASE_URL: postgresql://creditguard_app:${APP_DB_PASSWORD:-creditguard_app_dev_password}@postgres:5432/creditguard
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Must match the `iss` claim on tokens the browser gets from
+      # Keycloak (KC_HOSTNAME above) -- not the container-to-container
+      # address. The JWKS *fetch* itself can (and must) still go over the
+      # container-reachable address; host.docker.internal resolves to the
+      # host machine on Docker Desktop, and extra_hosts below makes the
+      # same alias work on Linux.
+      OIDC_ISSUER: http://localhost:8081/realms/creditguard
+      OIDC_JWKS_URL: http://host.docker.internal:8081/realms/creditguard/protocol/openid-connect/certs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

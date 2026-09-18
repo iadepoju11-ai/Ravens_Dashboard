@@ -11,6 +11,13 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
+  // Sent for endpoints already migrated to OIDC auth (see
+  // docs/architecture/oidc-rbac.md) -- tenant identity there comes from
+  // this token, verified server-side, never from tenantId below.
+  accessToken?: string;
+  // Still required by the handful of endpoints not yet migrated
+  // (monitoring, datasets) -- harmless to send alongside accessToken,
+  // since a migrated endpoint ignores this header entirely.
   tenantId?: string;
   method?: string;
   body?: unknown;
@@ -18,6 +25,9 @@ interface RequestOptions {
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (options.accessToken) {
+    headers.Authorization = `Bearer ${options.accessToken}`;
+  }
   if (options.tenantId) {
     headers["X-Tenant-Id"] = options.tenantId;
   }

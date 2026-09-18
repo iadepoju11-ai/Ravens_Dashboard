@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { AsyncSection } from "@/components/AsyncSection";
 import { KpiCard } from "@/components/KpiCard";
 import { useApiResource } from "@/hooks/useApiResource";
-import { useTenant } from "@/services/useTenant";
+import { useIdentity } from "@/services/useIdentity";
 import {
   fetchApiHealth,
   fetchFairnessReports,
@@ -13,35 +13,30 @@ import {
 } from "./api";
 
 export function OverviewPage() {
-  const { tenantId } = useTenant();
+  // App.tsx only ever renders this page once useIdentity().isAuthenticated
+  // is true, so accessToken/tenantId are assumed present here -- no
+  // "please log in" branch needed at this level.
+  const { accessToken, tenantId } = useIdentity();
+  const auth = { accessToken, tenantId };
 
   // Metrics itself is never "empty" — decision_count really can be 0,
   // which is a fact, not a failure; approval_rate/current_model_version
   // being null (also a fact — "no data yet") is handled per-card below,
   // not by hiding the whole section.
-  const metricsState = useApiResource(() => fetchMetrics(tenantId), [tenantId]);
-  const decisionsState = useApiResource(() => fetchRecentDecisions(tenantId), [tenantId], {
+  const metricsState = useApiResource(() => fetchMetrics(auth), [accessToken, tenantId]);
+  const decisionsState = useApiResource(() => fetchRecentDecisions(auth), [accessToken, tenantId], {
     isEmpty: (data) => data.length === 0,
   });
-  const alertsState = useApiResource(() => fetchRecentAlerts(tenantId), [tenantId], {
+  const alertsState = useApiResource(() => fetchRecentAlerts(auth), [accessToken, tenantId], {
     isEmpty: (data) => data.length === 0,
   });
-  const integrityState = useApiResource(() => fetchIntegrityStatus(tenantId), [tenantId], {
+  const integrityState = useApiResource(() => fetchIntegrityStatus(auth), [accessToken, tenantId], {
     isEmpty: (data) => data === null,
   });
   const healthState = useApiResource(() => fetchApiHealth(), []);
-  const fairnessState = useApiResource(() => fetchFairnessReports(tenantId), [tenantId], {
+  const fairnessState = useApiResource(() => fetchFairnessReports(auth), [accessToken, tenantId], {
     isEmpty: (data) => data.length === 0,
   });
-
-  if (!tenantId) {
-    return (
-      <p className="overview-page__prompt">
-        Enter a tenant ID above to load the overview — there is no authentication yet, so tenant
-        identity has to be set manually for now.
-      </p>
-    );
-  }
 
   return (
     <div className="overview-page">

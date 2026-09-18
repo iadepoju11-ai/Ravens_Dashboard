@@ -26,6 +26,18 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         {
             "users:manage",
             "tenant:manage",
+            # Read-only visibility across the tenant's operational data --
+            # discovered as a real gap while building the Overview
+            # dashboard (apps/web): it needs decisions:read + audit:read +
+            # fairness:read together, and no single one of the other four
+            # roles holds all three (each is scoped to its own workflow on
+            # purpose). An administrator overseeing a tenant reasonably
+            # needs to see the same dashboard everyone else's data feeds,
+            # without gaining any of the *write* permissions those roles
+            # carry (decisions:create, models:approve, audit:verify, ...).
+            "decisions:read",
+            "audit:read",
+            "fairness:read",
         }
     ),
     CREDIT_ANALYST: frozenset(

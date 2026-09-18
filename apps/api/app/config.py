@@ -14,12 +14,15 @@ class Config:
     # provider-specific code -- Keycloak locally, swappable for an
     # enterprise IdP later without touching app/security/jwt_verifier.py.
     # OIDC_ISSUER must match the `iss` claim on tokens the API actually
-    # receives, which for Docker-network traffic is the *internal*
-    # hostname (see docs/local-development.md) -- not the host-side port
-    # a human would use to reach the Keycloak admin console.
-    OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "http://keycloak:8080/realms/creditguard")
+    # receives -- Keycloak is pinned to present itself as
+    # localhost:8081 (KC_HOSTNAME, docker-compose.yml) regardless of which
+    # network path issued the token, since both a browser (the React app)
+    # and this API container need to agree on one issuer string. Only the
+    # JWKS *fetch* address (OIDC_JWKS_URL) needs to be reachable from
+    # wherever this process actually runs -- see docs/local-development.md.
+    OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "http://localhost:8081/realms/creditguard")
     OIDC_JWKS_URL = os.environ.get(
-        "OIDC_JWKS_URL", "http://keycloak:8080/realms/creditguard/protocol/openid-connect/certs"
+        "OIDC_JWKS_URL", "http://localhost:8081/realms/creditguard/protocol/openid-connect/certs"
     )
     OIDC_AUDIENCE = os.environ.get("OIDC_AUDIENCE", "creditguard-api")
 
