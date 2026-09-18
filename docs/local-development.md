@@ -282,17 +282,36 @@ clean up after themselves (see `test_db_permissions.py`'s and
 explicit teardown) so the suite stays repeatable across runs without
 `docker compose down -v` in between.
 
-**One test is the exception, and it's a big one**: `test_migrations.py`
-downgrades the entire database to `base` (dropping every table) and back
-to `head` as part of what it verifies. Running the full suite therefore
-wipes *all* data in that Postgres instance — any tenant, user, model, or
-decision you created by hand (e.g. to click through the React app) is
-gone afterward, not just test fixtures. This is correct and necessary for
-what that test checks; it just means "run the full test suite" and "keep
-manually-created demo data around" don't mix on the same Postgres
-instance. Re-seed whatever you need afterward (see "OIDC authentication"
-above for the tenant/user creation recipe), or point `MIGRATION_TEST_DATABASE_URL`
-at a separate, disposable database if you want to avoid this entirely.
+**One test would otherwise be an exception, and a big one**:
+`test_migrations.py` downgrades its target database to `base` (dropping
+every table) and back to `head` as part of what it verifies — running it
+against the main database would wipe *all* data, including any tenant,
+user, model, or decision created by hand (e.g. to click through the React
+app), not just test fixtures. It's pointed instead at
+`MIGRATION_TEST_DATABASE_URL` (`.env.example` has a working default,
+`docker-compose.yml`'s `postgres-migrations-test` service — see below),
+so this no longer happens; `docker compose run api python -m pytest
+tests/ -v` is safe to run as often as you like without disturbing
+anything in the main database.
+
+### Why the migration test needs its own Postgres *server*, not just its own database
+
+A second database on the *same* Postgres server isn't enough. Postgres
+roles are cluster-wide, not per-database: `a4e71d2b014c`'s `downgrade()`
+does `DROP ROLE creditguard_app`, and that fails with `role ... cannot be
+dropped because some objects depend on it` as long as the main
+database's tables still hold grants to it — which they always do outside
+this one test. `postgres-migrations-test` (`docker-compose.yml`) is a
+completely separate container/cluster for exactly this reason. It has no
+persistent volume on purpose — it's meant to be disposable, and starting
+clean every time is a feature, not a gap. First-time setup needs
+migrations applied to it once, same as the main database:
+
+```
+docker compose up -d postgres-migrations-test
+docker compose run --rm -e DATABASE_URL=postgresql://creditguard:creditguard@postgres-migrations-test:5432/creditguard \
+  api flask db upgrade
+```
 
 ## Running outside Docker
 
