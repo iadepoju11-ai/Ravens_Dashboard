@@ -18,6 +18,8 @@ REPORT_PATH = ARTIFACT_DIR / "credit-risk-v1-validation-report.json"
 MODEL_PATH = ARTIFACT_DIR / "credit-risk-v1.joblib"
 BASELINE_MODEL_PATH = ARTIFACT_DIR / "credit-risk-v1-baseline-logreg.joblib"
 METADATA_PATH = ARTIFACT_DIR / "credit-risk-v1-metadata.json"
+DATA_QUALITY_REPORT_PATH = ARTIFACT_DIR / "credit-risk-v1-data-quality-report.json"
+LEAKAGE_REPORT_PATH = ARTIFACT_DIR / "credit-risk-v1-leakage-report.json"
 
 RANDOM_SEED = 42
 

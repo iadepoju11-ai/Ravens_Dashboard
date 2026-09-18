@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 
 from ml import config
 from ml.data import feature_columns, load_csv, stratified_split
+from ml.data_quality import profile as profile_data_quality
 from ml.evaluate import evaluate
 from ml.explain import run_shap_fidelity_check
+from ml.leakage import run_leakage_checks
 from ml.train import save_pipeline, train_logistic_regression, train_xgboost
 
 
@@ -23,6 +25,15 @@ def main() -> None:
     config.ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
     df = load_csv(config.APPLICATION_TRAIN_PATH)
+
+    data_quality_report = profile_data_quality(df, config.TARGET_COLUMN)
+    config.DATA_QUALITY_REPORT_PATH.write_text(json.dumps(data_quality_report, indent=2))
+    print(
+        f"data quality: n_rows={data_quality_report['n_rows']} "
+        f"n_duplicate_rows={data_quality_report['n_duplicate_rows']} "
+        f"high_missingness_columns={len(data_quality_report['flags']['high_missingness']['columns'])}"
+    )
+
     train_df, val_df, holdout_df = stratified_split(
         df,
         config.TARGET_COLUMN,
@@ -38,6 +49,25 @@ def main() -> None:
         f"train={len(train_df)} val={len(val_df)} holdout={len(holdout_df)} "
         f"numeric_features={len(numeric_columns)} categorical_features={len(categorical_columns)}"
     )
+
+    leakage_report = run_leakage_checks(
+        train_df, val_df, holdout_df, numeric_columns, config.TARGET_COLUMN, config.ID_COLUMN
+    )
+    config.LEAKAGE_REPORT_PATH.write_text(json.dumps(leakage_report, indent=2))
+    if not leakage_report["passed"]:
+        # A hard stop, not a warning: train_id/val_id/holdout_id overlap
+        # means the model would be evaluated (in part) on data it was
+        # trained on -- every downstream metric would be unreliable.
+        raise RuntimeError(
+            f"Leakage check failed -- applicant ids overlap across splits: "
+            f"{leakage_report['split_overlap']['overlap_counts']}"
+        )
+    if leakage_report["target_correlation_scan"]["flagged_for_review"] or leakage_report["suspicious_column_names"]:
+        print(
+            "leakage scan flagged columns for manual review (not a hard failure): "
+            f"{leakage_report['target_correlation_scan']['flagged_for_review']} "
+            f"{leakage_report['suspicious_column_names']}"
+        )
 
     logistic_pipeline = train_logistic_regression(
         train_df, numeric_columns, categorical_columns, config.TARGET_COLUMN, config.RANDOM_SEED
