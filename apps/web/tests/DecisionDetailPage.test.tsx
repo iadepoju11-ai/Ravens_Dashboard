@@ -14,7 +14,7 @@ function jsonResponse(body: unknown) {
 describe("DecisionDetailPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("renders the decision and its feature attributions", async () => {
+  it("renders the decision, its top reasons, and the full feature attributions", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
@@ -36,6 +36,9 @@ describe("DecisionDetailPage", () => {
             method: "shap-tree",
             base_value: 0.5,
             feature_attributions: { income: 0.12 },
+            reason_codes: [
+              { rank: 1, feature: "income", label: "income", contribution: 0.12, direction: "increased_risk" },
+            ],
             created_at: "2026-09-18T00:00:00Z",
           },
         });
@@ -52,6 +55,7 @@ describe("DecisionDetailPage", () => {
 
     await waitFor(() => expect(screen.getByText("APP-42")).toBeInTheDocument());
     expect(screen.getByText("approve")).toBeInTheDocument();
-    expect(screen.getByText("income")).toBeInTheDocument();
+    expect(screen.getByText("increased risk")).toBeInTheDocument();
+    expect(screen.getAllByText("income").length).toBeGreaterThan(0);
   });
 });

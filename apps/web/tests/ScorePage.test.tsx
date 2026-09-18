@@ -38,6 +38,9 @@ describe("ScorePage", () => {
             method: "shap-tree",
             base_value: 0.5,
             feature_attributions: { income: -0.08 },
+            reason_codes: [
+              { rank: 1, feature: "income", label: "income", contribution: -0.08, direction: "decreased_risk" },
+            ],
             created_at: "2026-09-18T00:00:00Z",
           },
         });
@@ -53,7 +56,8 @@ describe("ScorePage", () => {
 
     await waitFor(() => expect(screen.getByText("refer")).toBeInTheDocument());
     expect(screen.getByText("0.420")).toBeInTheDocument();
-    expect(screen.getByText("income")).toBeInTheDocument();
+    expect(screen.getByText("decreased risk")).toBeInTheDocument();
+    expect(screen.getAllByText("income").length).toBeGreaterThan(0);
   });
 
   it("shows a clear message, not a crash, when the caller lacks permission", async () => {

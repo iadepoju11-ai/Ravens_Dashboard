@@ -8,6 +8,7 @@ from app.models.decision import DECISION_OUTCOMES, Decision
 from app.models.explanation import Explanation
 from app.security.authentication import authenticate
 from app.security.permissions import require_permission
+from app.services.reason_codes import generate_reason_codes
 from app.services.scoring_service import ScoringRuntimeError, ScoringService, ScoringValidationError
 
 bp = Blueprint("decisions", __name__)
@@ -21,6 +22,15 @@ def _parse_iso_datetime(value: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _explanation_dict(explanation: Explanation | None) -> dict | None:
+    if explanation is None:
+        return None
+    return {
+        **explanation.to_dict(),
+        "reason_codes": generate_reason_codes(explanation.feature_attributions),
+    }
 
 
 @bp.post("/score")
@@ -55,7 +65,7 @@ def score_application():
     return (
         jsonify(
             decision=result.decision.to_dict(),
-            explanation=result.explanation.to_dict() if result.explanation else None,
+            explanation=_explanation_dict(result.explanation),
         ),
         status_code,
     )
@@ -131,5 +141,5 @@ def get_decision(decision_id: str):
 
     return jsonify(
         decision=decision.to_dict(),
-        explanation=explanation.to_dict() if explanation else None,
+        explanation=_explanation_dict(explanation),
     )

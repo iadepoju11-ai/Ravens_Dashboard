@@ -19,12 +19,25 @@ export interface Decision {
   created_at: string;
 }
 
+export interface ReasonCode {
+  rank: number;
+  feature: string;
+  label: string;
+  contribution: number;
+  direction: "increased_risk" | "decreased_risk" | "no_effect";
+}
+
 export interface Explanation {
   id: string;
   decision_id: string;
   method: string;
   base_value: number;
   feature_attributions: Record<string, number>;
+  // A ranked, human-readable view of feature_attributions (top 5 by
+  // |contribution|) -- a pure deterministic transform of the SHAP values
+  // above, computed server-side (app/services/reason_codes.py), never a
+  // generative model inventing reasons (CLAUDE.md).
+  reason_codes: ReasonCode[];
   created_at: string;
 }
 

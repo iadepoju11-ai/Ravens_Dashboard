@@ -46,7 +46,24 @@ export function DecisionDetailPage() {
 
             {explanation ? (
               <>
-                <h2>Feature attributions ({explanation.method})</h2>
+                <h2>Top reasons</h2>
+                <p>
+                  Ranked by impact on the model's risk score (largest |contribution| first) — a direct read-out
+                  of the model's own SHAP values, not a generated summary.
+                </p>
+                <ol className="reason-code-list">
+                  {explanation.reason_codes.map((reason) => (
+                    <li key={reason.feature} className={`reason-code-list__item reason-code-list__item--${reason.direction}`}>
+                      <span className="reason-code-list__label">{reason.label}</span>
+                      <span className="reason-code-list__direction">
+                        {reason.direction === "increased_risk" ? "increased risk" : "decreased risk"}
+                      </span>
+                      <span className="reason-code-list__contribution">{reason.contribution.toFixed(4)}</span>
+                    </li>
+                  ))}
+                </ol>
+
+                <h2>All feature attributions ({explanation.method})</h2>
                 <p>Base value: {explanation.base_value.toFixed(3)}</p>
                 <table className="data-table">
                   <thead>

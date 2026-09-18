@@ -129,7 +129,20 @@ export function ScorePage() {
           </dl>
           {state.data.explanation && (
             <>
-              <h3>Feature attributions ({state.data.explanation.method})</h3>
+              <h3>Top reasons</h3>
+              <ol className="reason-code-list">
+                {state.data.explanation.reason_codes.map((reason) => (
+                  <li key={reason.feature} className={`reason-code-list__item reason-code-list__item--${reason.direction}`}>
+                    <span className="reason-code-list__label">{reason.label}</span>
+                    <span className="reason-code-list__direction">
+                      {reason.direction === "increased_risk" ? "increased risk" : "decreased risk"}
+                    </span>
+                    <span className="reason-code-list__contribution">{reason.contribution.toFixed(4)}</span>
+                  </li>
+                ))}
+              </ol>
+
+              <h3>All feature attributions ({state.data.explanation.method})</h3>
               <table className="data-table">
                 <thead>
                   <tr>
