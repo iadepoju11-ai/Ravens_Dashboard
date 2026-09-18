@@ -47,7 +47,7 @@ def app_role_client(app_role_app):
     return app_role_app.test_client()
 
 
-def test_app_role_can_perform_a_normal_scoring_workflow(app_role_client, app_role_app):
+def test_app_role_can_perform_a_normal_scoring_workflow(app_role_client, app_role_app, auth_headers):
     # Unlike the SQLite unit-test suite (a fresh in-memory DB per test), this
     # runs against a real, persistent Postgres instance -- a fixed slug
     # would collide with leftover rows from a previous run of this same
@@ -75,11 +75,14 @@ def test_app_role_can_perform_a_normal_scoring_workflow(app_role_client, app_rol
     try:
         # Proves INSERT works on ordinary tables *and* on audit_events (the
         # scoring flow writes an audit event as part of the same request) —
-        # not just that the connection succeeds.
+        # not just that the connection succeeds. Also exercises the
+        # OIDC-authenticated path (app/security/), which JIT-provisions a
+        # User row -- another ordinary-table INSERT the app role must be
+        # able to do.
         response = app_role_client.post(
             "/api/v1/score",
             json={"application_reference": "APP-1", "features": {"income": 0.5}},
-            headers={"X-Tenant-Id": tenant_id},
+            headers=auth_headers(tenant_id),
         )
         assert response.status_code == 201
     finally:
@@ -94,6 +97,7 @@ def test_app_role_can_perform_a_normal_scoring_workflow(app_role_client, app_rol
                     sa.text("DELETE FROM audit_events WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id}
                 )
                 conn.execute(sa.text("DELETE FROM models WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id})
+                conn.execute(sa.text("DELETE FROM users WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id})
                 conn.execute(sa.text("DELETE FROM tenants WHERE id = :tenant_id"), {"tenant_id": tenant_id})
             owner_engine.dispose()
 

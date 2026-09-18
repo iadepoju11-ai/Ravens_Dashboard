@@ -28,6 +28,15 @@ def resolve_tenant() -> Tenant:
     if not tenant_id:
         raise TenantResolutionError("X-Tenant-Id header is required")
 
+    return resolve_tenant_by_id(tenant_id)
+
+
+def resolve_tenant_by_id(tenant_id: str) -> Tenant:
+    """Same lookup as resolve_tenant(), but for callers that already have
+    a trusted tenant_id in hand -- an authenticated Identity's tenant_id
+    (app/security/), never a client-supplied header. Endpoints migrated
+    to OIDC auth (POST /score so far, see app/api/v1/decisions.py) use
+    this instead of the header-based resolve_tenant()."""
     tenant = db.session.get(Tenant, tenant_id)
     if tenant is None or not tenant.is_active:
         raise TenantResolutionError("Unknown or inactive tenant", status_code=404)

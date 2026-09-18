@@ -157,7 +157,7 @@ def test_approving_an_unknown_model_version_is_rejected(client, app):
     not REAL_ARTIFACT_AVAILABLE,
     reason=f"real trained artifact not found at {ARTIFACT_PATH} — run `make ml-train` first",
 )
-def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(client, app):
+def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(client, app, auth_headers):
     tenant = _create_tenant("real-model-bank")
     metadata = json.loads(Path(METADATA_PATH).read_text())
 
@@ -205,7 +205,7 @@ def test_score_against_the_real_deployed_model_uses_shap_tree_explanations(clien
             "application_reference": "APP-REAL-MODEL-1",
             "features": {"AMT_INCOME_TOTAL": 150000, "AMT_CREDIT": 500000, "NAME_CONTRACT_TYPE": "Cash loans"},
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id),
     )
 
     assert score_response.status_code == 201

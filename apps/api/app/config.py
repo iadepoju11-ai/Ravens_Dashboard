@@ -10,6 +10,19 @@ class Config:
 
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "change-me")
 
+    # OIDC (app/security/): standard issuer/JWKS/audience validation, not
+    # provider-specific code -- Keycloak locally, swappable for an
+    # enterprise IdP later without touching app/security/jwt_verifier.py.
+    # OIDC_ISSUER must match the `iss` claim on tokens the API actually
+    # receives, which for Docker-network traffic is the *internal*
+    # hostname (see docs/local-development.md) -- not the host-side port
+    # a human would use to reach the Keycloak admin console.
+    OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "http://keycloak:8080/realms/creditguard")
+    OIDC_JWKS_URL = os.environ.get(
+        "OIDC_JWKS_URL", "http://keycloak:8080/realms/creditguard/protocol/openid-connect/certs"
+    )
+    OIDC_AUDIENCE = os.environ.get("OIDC_AUDIENCE", "creditguard-api")
+
     # Off by default (matches the academic prototype's own KAFKA_ENABLED
     # flag) -- the outbox table still records every event regardless, so
     # nothing is lost while Kafka is disabled; enabling it later just lets

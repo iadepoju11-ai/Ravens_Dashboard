@@ -27,6 +27,7 @@ project) without colliding:
 | --- | --- | --- |
 | Postgres | 5432 | **5433** |
 | Kafka | 9092 | **9093** |
+| Keycloak | 8080 | **8081** (admin console/manual use only — see below) |
 
 Inside the Docker network, containers talk to each other on the *default*
 ports via service name (`postgres:5432`, `kafka:9092`) — the remapping only
@@ -136,6 +137,83 @@ docker compose exec kafka kafka-console-consumer --bootstrap-server localhost:90
   --topic decision.created.v1 --from-beginning --max-messages 1
 ```
 
+## OIDC authentication (Keycloak)
+
+`POST /score` is the first endpoint migrated to OIDC auth (CHECKLIST.md
+Phase 6, `docs/architecture/oidc-rbac.md`) — everything else still uses
+the `X-Tenant-Id` header. `docker compose up` starts a `keycloak` service
+that auto-imports `infra/keycloak/creditguard-realm.json` on first boot
+(the realm, its five roles, and the `creditguard-api` client with the
+protocol mappers that put `tenant_id` and an `aud: creditguard-api` claim
+on every access token).
+
+`OIDC_ISSUER`/`OIDC_JWKS_URL` (`apps/api/app/config.py`) point at the
+*internal* Docker address (`keycloak:8080`), since that's what the token
+the api service actually receives was issued against — not the host-side
+port below. Getting a token for manual testing therefore has to happen
+from *inside* the Docker network too (`docker compose exec api python
+...`, or `kcadm.sh` inside the `keycloak` container itself), not from a
+browser hitting `localhost:8081`.
+
+To create a test user and get a real token:
+
+```
+# Admin console: http://localhost:8081 (admin/admin — dev-only creds)
+
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://localhost:8080 --realm master --user admin --password admin
+
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh create users -r creditguard \
+  -s username=test-analyst -s enabled=true -s email=test-analyst@example.com \
+  -s firstName=Test -s lastName=Analyst -s emailVerified=true \
+  -s 'attributes.tenant_id=["<a real tenant UUID from the tenants table>"]'
+
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh set-password -r creditguard \
+  --username test-analyst --new-password test-pass-123
+
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh add-roles -r creditguard \
+  --uusername test-analyst --rolename credit_analyst
+
+# Then, from inside the Docker network (e.g. `docker compose exec api python`):
+#   POST http://keycloak:8080/realms/creditguard/protocol/openid-connect/token
+#   grant_type=password&client_id=creditguard-api&username=test-analyst&password=test-pass-123
+# and use the returned access_token as `Authorization: Bearer <token>` against
+# http://localhost:5000/api/v1/score (or from inside the api container,
+# http://localhost:5000, since gunicorn binds there too).
+```
+
+(On Windows/Git Bash, prefix `docker compose exec` commands above with
+`MSYS_NO_PATHCONV=1` — otherwise Git Bash rewrites the container's
+`/opt/keycloak/...` path as a Windows path and the command fails with
+"no such file or directory".)
+
+### Two Keycloak gotchas this realm config already works around
+
+Both were found by actually running a real token through the real
+container — a mocked-JWKS unit test can't catch either, since both are
+about what Keycloak *puts in* a token, not whether the API validates it
+correctly:
+
+- **A new user needs `email`/`firstName`/`lastName`, or the password
+  grant fails with `"Account is not fully set up"`.** Keycloak 25's
+  "declarative user profile" runs a `VERIFY_PROFILE` check against
+  whichever attributes the profile schema marks required (email/first/last
+  name, by default) — an incomplete profile blocks login entirely, with an
+  error message that doesn't mention which field is missing.
+- **A custom claim (`tenant_id`, here) is silently dropped unless it's
+  declared in the realm's user-profile schema — not just added by a
+  protocol mapper.** Setting the attribute via the admin API/console
+  *appears* to succeed, but the declarative user profile strips any
+  attribute it doesn't recognize before the token is even built, so the
+  claim just doesn't show up — no error anywhere. `infra/keycloak/creditguard-realm.json`'s
+  `components` block declares `tenant_id` in the schema for exactly this
+  reason.
+- Related, less surprising: the `sub` claim itself comes from Keycloak's
+  built-in **`basic`** client scope. A client's `defaultClientScopes` list
+  needs `basic` in it (already set in the realm export) or every token is
+  missing `sub` — the one claim `app/security/provisioning.py` cannot
+  function without.
+
 ## Running tests
 
 ```
@@ -182,6 +260,6 @@ python -m app.main
 ## Tearing down
 
 ```
-docker compose down          # stop containers, keep the postgres_data volume
-docker compose down -v       # also delete the volume (destroys local data)
+docker compose down          # stop containers, keep the postgres_data/keycloak_data volumes
+docker compose down -v       # also delete the volumes (destroys local data, including Keycloak realm/users)
 ```

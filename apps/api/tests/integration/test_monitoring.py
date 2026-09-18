@@ -24,7 +24,7 @@ def test_metrics_report_no_data_explicitly_rather_than_zero(client, app):
     assert metrics["current_model_version"] is None
 
 
-def test_metrics_report_approval_rate_and_current_model_version(client, app):
+def test_metrics_report_approval_rate_and_current_model_version(client, app, auth_headers):
     tenant = _create_tenant("monitoring-data-bank")
     model = Model(tenant_id=tenant.id, name="credit-risk")
     db.session.add(model)
@@ -38,15 +38,16 @@ def test_metrics_report_approval_rate_and_current_model_version(client, app):
     db.session.add(model_version)
     db.session.commit()
 
+    headers = auth_headers(tenant.id)
     client.post(
         "/api/v1/score",
         json={"application_reference": "APP-1", "features": {"income": 0.1}, "request_id": "req-1"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=headers,
     )
     client.post(
         "/api/v1/score",
         json={"application_reference": "APP-2", "features": {"income": 0.9}, "request_id": "req-2"},
-        headers={"X-Tenant-Id": tenant.id},
+        headers=headers,
     )
 
     response = client.get("/api/v1/monitoring/metrics", headers={"X-Tenant-Id": tenant.id})

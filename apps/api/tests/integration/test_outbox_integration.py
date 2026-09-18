@@ -30,7 +30,7 @@ def _create_tenant_and_model() -> tuple[Tenant, ModelVersion]:
     return tenant, model_version
 
 
-def test_score_enqueues_the_three_expected_outbox_events(client, app):
+def test_score_enqueues_the_three_expected_outbox_events(client, app, auth_headers):
     tenant, model_version = _create_tenant_and_model()
 
     response = client.post(
@@ -40,7 +40,7 @@ def test_score_enqueues_the_three_expected_outbox_events(client, app):
             "features": {"income": 0.5},
             "request_id": "req-outbox-1",
         },
-        headers={"X-Tenant-Id": tenant.id},
+        headers=auth_headers(tenant.id),
     )
     assert response.status_code == 201
     decision_id = response.get_json()["decision"]["id"]
@@ -57,18 +57,19 @@ def test_score_enqueues_the_three_expected_outbox_events(client, app):
     assert by_type["explanation.created.v1"].aggregate_id == explanation_id
 
 
-def test_idempotent_replay_does_not_enqueue_duplicate_events(client, app):
+def test_idempotent_replay_does_not_enqueue_duplicate_events(client, app, auth_headers):
     tenant, _ = _create_tenant_and_model()
     payload = {
         "application_reference": "APP-2",
         "features": {"income": 0.5},
         "request_id": "req-outbox-replay",
     }
+    headers = auth_headers(tenant.id)
 
-    first = client.post("/api/v1/score", json=payload, headers={"X-Tenant-Id": tenant.id})
+    first = client.post("/api/v1/score", json=payload, headers=headers)
     assert first.status_code == 201
 
-    second = client.post("/api/v1/score", json=payload, headers={"X-Tenant-Id": tenant.id})
+    second = client.post("/api/v1/score", json=payload, headers=headers)
     assert second.status_code == 200  # replay, not a new decision
 
     events = OutboxEvent.query.filter_by(tenant_id=tenant.id).all()

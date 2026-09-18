@@ -3,6 +3,12 @@ Flask-SQLAlchemy==3.1.1
 Flask-Migrate==4.0.7
 Flask-JWT-Extended==4.6.0
 Flask-Cors==4.0.1
+
+# OIDC access-token verification (app/security/jwt_verifier.py) --
+# standard issuer/JWKS/audience/expiry checks against Keycloak locally
+# (any OIDC-compliant IdP in production, see docs/local-development.md).
+# The [crypto] extra pulls in `cryptography`, needed for RS256.
+PyJWT[crypto]==2.14.0
 psycopg2-binary==2.9.9
 gunicorn==22.0.0
 python-dotenv==1.0.1

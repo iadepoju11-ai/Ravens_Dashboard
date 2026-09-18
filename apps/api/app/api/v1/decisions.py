@@ -3,9 +3,16 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
-from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant
+from app.infrastructure.security.tenant_context import (
+    TenantResolutionError,
+    resolve_tenant,
+    resolve_tenant_by_id,
+)
 from app.models.decision import DECISION_OUTCOMES, Decision
 from app.models.explanation import Explanation
+from app.security.authentication import authenticate
+from app.security.jwt_verifier import TokenValidationError
+from app.security.permissions import AuthorizationError, require_permission
 from app.services.scoring_service import ScoringRuntimeError, ScoringService, ScoringValidationError
 
 bp = Blueprint("decisions", __name__)
@@ -23,8 +30,21 @@ def _parse_iso_datetime(value: str) -> datetime | None:
 
 @bp.post("/score")
 def score_application():
+    # First endpoint migrated to OIDC auth (CHECKLIST.md Phase 6): tenant
+    # comes from the verified identity, never the client-supplied
+    # X-Tenant-Id header used by the other endpoints in this module below,
+    # which stay on the header for now (see docs/architecture/oidc-rbac.md
+    # for why this was rolled out one endpoint at a time).
     try:
-        tenant = resolve_tenant()
+        identity = authenticate()
+        require_permission(identity, "decisions:create")
+    except TokenValidationError as exc:
+        return jsonify(error=exc.message), exc.status_code
+    except AuthorizationError as exc:
+        return jsonify(error=exc.message), exc.status_code
+
+    try:
+        tenant = resolve_tenant_by_id(identity.tenant_id)
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
