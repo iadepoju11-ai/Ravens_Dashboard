@@ -213,3 +213,52 @@ def test_a_model_version_without_a_recorded_schema_skips_validation(app):
     )
 
     assert result.decision.score == 0.9
+
+
+def test_a_concurrent_duplicate_request_is_deduplicated_not_crashed(app):
+    """CHECKLIST.md Phase 7C: two callers racing with the same idempotency
+    key can both pass the initial `_find_existing` check before either
+    commits -- the DB's own `uq_decision_tenant_request_id` constraint
+    (app/models/decision.py) is what actually arbitrates that race.
+    Simulated deterministically (no real threads needed): the first
+    `_find_existing` call reports "not found", exactly as it would for
+    the loser of a real race, but then a colliding row is committed
+    *during* that same call -- standing in for the concurrent winner's
+    commit landing in the gap between the check and this call's own
+    insert."""
+    tenant, model_version = _create_tenant_and_deployed_model()
+
+    service = ScoringService(runtime=_FixedRuntime())
+    real_find_existing = service._find_existing
+    calls = {"n": 0}
+
+    def _find_existing_racing(tenant_arg, request_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            db.session.add(
+                Decision(
+                    tenant_id=tenant_arg.id,
+                    model_version_id=model_version.id,
+                    application_reference="APP-RACE",
+                    request_id=request_id,
+                    input_payload={"income": 1},
+                    score=0.1,
+                    outcome="approve",
+                )
+            )
+            db.session.commit()
+            return None
+        return real_find_existing(tenant_arg, request_id)
+
+    service._find_existing = _find_existing_racing
+
+    result = service.score(
+        tenant=tenant,
+        application_reference="APP-RACE",
+        features={"income": 1},
+        request_id="race-1",
+    )
+
+    assert result.created is False
+    assert result.decision.outcome == "approve"  # the concurrent winner's row, not a fresh _FixedRuntime score
+    assert Decision.query.filter_by(tenant_id=tenant.id, request_id="race-1").count() == 1

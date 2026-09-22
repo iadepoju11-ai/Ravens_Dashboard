@@ -1,0 +1,5 @@
+# Deliberately separate from apps/api/requirements.txt and from
+# tests/smoke/requirements.txt -- see tests/resilience/conftest.py's
+# module docstring for why.
+requests==2.32.3
+pytest==8.2.2

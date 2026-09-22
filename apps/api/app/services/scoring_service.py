@@ -18,6 +18,8 @@ import logging
 import time
 from dataclasses import dataclass
 
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models.decision import Decision
 from app.models.explanation import Explanation
@@ -150,7 +152,34 @@ class ScoringService:
             outcome=outcome,
         )
         self.session.add(decision)
-        self.session.flush()
+        try:
+            self.session.flush()
+        except IntegrityError:
+            # Two concurrent calls with the same idempotency key can both
+            # pass the _find_existing check above before either commits
+            # (CHECKLIST.md Phase 7C: "duplicate-event safety") -- the
+            # `uq_decision_tenant_request_id` constraint (app/models/decision.py)
+            # is what actually arbitrates the race, and this is the loser
+            # finding out. Nothing else has been added to the session yet
+            # (explanation/governance/audit/outbox are all below this
+            # line), so rolling back only discards this call's own losing
+            # insert, not any other work.
+            self.session.rollback()
+            existing = self._find_existing(tenant, request_id)
+            if existing is None:
+                # The IntegrityError wasn't this race after all (e.g. a
+                # different constraint) -- re-raise so it surfaces as a
+                # genuine, unexpected scoring error rather than being
+                # silently swallowed.
+                raise
+            explanation = Explanation.query.filter_by(decision_id=existing.id).first()
+            SCORING_REQUESTS_TOTAL.labels(outcome=existing.outcome).inc()
+            SCORING_DURATION_SECONDS.observe(time.perf_counter() - request_start)
+            logger.info(
+                "scoring request deduplicated after concurrent race",
+                extra={"decision_id": existing.id, "outcome": existing.outcome, "idempotent_replay": True},
+            )
+            return ScoringResult(decision=existing, explanation=explanation, created=False)
 
         explanation = Explanation(
             decision_id=decision.id,

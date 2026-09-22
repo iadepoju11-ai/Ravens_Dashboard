@@ -361,7 +361,88 @@ observability vendors alike. Nothing here imports a vendor-specific SDK.
   `HTTPException`s (404, 405, ...) are handled separately and keep their
   normal status/behavior, not swallowed into this generic response.
 
-## Kafka
+## Resilience and load testing (CHECKLIST.md Phase 7C)
+
+Two more independently-runnable suites against the real deployed stack,
+alongside the smoke tests above — both verified for real against this
+staging deployment while writing this, not assumed correct from reading
+the code.
+
+### Load testing
+
+`tests/load/load_test_score.py` fires concurrent `POST /score` requests
+at a real deployment and reports client-observed latency/throughput
+alongside the server-observed numbers from
+`GET /api/v1/monitoring/observability` (Phase 7B) for the same window —
+proving the observability instrumentation itself captures load
+accurately, not just that the API stays up under it.
+
+```
+pip install -r tests/load/requirements.txt
+python tests/load/load_test_score.py --concurrency 10 --total-requests 200
+```
+
+(`make staging-load-test`, `ARGS="..."` to override flags.) See
+`docs/performance/staging-baseline.md` for the measured baseline this
+produced and — the more important part — what it reveals about this
+stack's real concurrency ceiling (a single gunicorn worker, not
+`ScoringService` itself).
+
+### Resilience / fault-injection tests
+
+`tests/resilience/` proves the system degrades safely and recovers
+without manual intervention when a real dependency fails, and that
+duplicate/concurrent requests are handled safely:
+
+- `test_postgres_failure.py` — stops the real `postgres` container,
+  confirms `/health/ready` reports `503` with no leaked internals and
+  `/score` fails safely (not a crash or a hang), then restarts it and
+  confirms the API recovers **without restarting the `api` container** —
+  SQLAlchemy's own connection pool reconnects on its own.
+- `test_kafka_failure_and_outbox.py` — stops `kafka`, confirms `/score`
+  keeps succeeding (Kafka is not in the critical scoring path — CLAUDE.md)
+  and that `flask events publish-outbox` records retryable failures
+  instead of losing or crashing on the pending rows, then restarts kafka
+  and confirms the same rows drain and publish once it recovers — retry
+  behaviour and transactional-outbox persistence, proven against a real
+  broker outage.
+- `test_api_container_restart.py` — restarts the `api` container itself,
+  confirms it comes back healthy on its own and that a decision scored
+  before the restart is still readable afterward (Postgres, not the API
+  process, is the system of record).
+- `test_duplicate_request_safety.py` — fires 10 simultaneous client-side
+  `/score` calls with the same `request_id`; confirms exactly one decision
+  is created and every racing call gets a safe response, never a 500. This
+  is the real-concurrency proof behind a fix made in this same pass:
+  `ScoringService` could previously let two requests both pass its
+  idempotency lookup before either committed, and the loser would 500 on
+  the database's own `uq_decision_tenant_request_id` constraint instead
+  of receiving the winner's decision — `apps/api/app/services/scoring_service.py`
+  now catches that `IntegrityError` and returns the existing decision
+  instead (regression-tested deterministically at the unit level too:
+  `apps/api/tests/unit/test_scoring_service.py::test_a_concurrent_duplicate_request_is_deduplicated_not_crashed`).
+
+The Postgres/Kafka/API-restart tests are **destructive** — they stop or
+restart real containers in this deployment — so they're marked
+`pytest.mark.destructive` and skip unless `RUN_RESILIENCE_TESTS=1` is
+set, to make sure a plain `pytest` invocation (or an unrelated CI job)
+never triggers them by accident. Every one restores the container(s) it
+touched in a `finally` block, even on failure, so a failing assertion
+never leaves the shared staging deployment down. The duplicate-request
+test is not gated — it never touches a container, only ordinary
+concurrent HTTP traffic.
+
+```
+pip install -r tests/resilience/requirements.txt
+cd tests/resilience && RUN_RESILIENCE_TESTS=1 python -m pytest . -v
+```
+
+(`make staging-resilience-test`.) All 4 tests verified passing against
+this staging deployment, individually and as a full sequential run, with
+the stack confirmed fully healthy (`docker compose ... ps`, all services
+`Up ... (healthy)`) immediately afterward both times.
+
+## Known limitations
 
 - **No TLS anywhere.** Keycloak runs in `start-dev` mode
   (`sslRequired: none`), and `api`/`web` serve plain HTTP. A real

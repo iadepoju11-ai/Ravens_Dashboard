@@ -1,4 +1,4 @@
-.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint staging-up staging-down staging-seed staging-logs staging-ps staging-smoke-test staging-redeploy
+.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint staging-up staging-down staging-seed staging-logs staging-ps staging-smoke-test staging-redeploy staging-load-test staging-resilience-test
 
 up:
 	docker compose up --build
@@ -38,6 +38,23 @@ staging-smoke-test:
 # docs/runbooks/deployment.md for what to do if this fails partway
 # through (rollback procedure).
 staging-redeploy: staging-up staging-seed staging-smoke-test
+
+# CHECKLIST.md Phase 7C. Requires `pip install -r tests/load/requirements.txt`
+# once, and a staging stack already up + seeded. Prints a measured
+# latency/throughput report -- see docs/performance/staging-baseline.md
+# for what a real run of this produced and how to read it. Override
+# concurrency/volume: `make staging-load-test ARGS="--concurrency 25 --total-requests 250"`.
+staging-load-test:
+	cd tests/load && python load_test_score.py $(ARGS)
+
+# CHECKLIST.md Phase 7C. Requires `pip install -r tests/resilience/requirements.txt`
+# once, and a staging stack already up + seeded. Only the non-destructive
+# duplicate-request-safety test runs by default; the tests that stop/
+# restart real staging containers (Postgres, Kafka, the api container)
+# require the explicit RUN_RESILIENCE_TESTS=1 opt-in -- see
+# tests/resilience/conftest.py and docs/runbooks/deployment.md.
+staging-resilience-test:
+	cd tests/resilience && RUN_RESILIENCE_TESTS=1 python -m pytest . -v
 
 api-install:
 	cd apps/api && pip install -r requirements.txt
