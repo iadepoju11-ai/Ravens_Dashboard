@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AsyncSection } from "@/components/AsyncSection";
-import { FloatingBackdrop } from "@/components/FloatingBackdrop";
 import {
   AuditIcon,
   DatasetsIcon,
@@ -168,7 +167,6 @@ export function OverviewPage() {
         </section>
 
         <div className="hero-panel">
-          <FloatingBackdrop variant="hero" />
           <p className="hero-panel__title">Transparent AI. Fairer credit. Stronger decisions.</p>
           <p className="hero-panel__body">
             CreditGuard XAI combines machine learning, explainable AI, and governance to make credit decisions

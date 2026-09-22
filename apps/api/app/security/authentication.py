@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from flask import request
 
+from app.observability.context import set_tenant_id
 from app.security.identity import Identity, set_current_identity
 from app.security.jwt_verifier import TokenValidationError, decode_access_token
 from app.security.provisioning import resolve_identity
@@ -31,4 +32,8 @@ def authenticate() -> Identity:
     claims = decode_access_token(token)
     identity = resolve_identity(claims)
     set_current_identity(identity)
+    # The one choke point every authenticated route passes through --
+    # setting it here means every structured log line for the rest of
+    # this request carries tenant_id, without each route file doing it.
+    set_tenant_id(identity.tenant_id)
     return identity

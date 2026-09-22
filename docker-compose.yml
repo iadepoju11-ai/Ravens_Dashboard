@@ -146,6 +146,17 @@ services:
   web:
     build:
       context: ./apps/web
+      # Targets the Dockerfile's `build` stage (has npm + full source, not
+      # the final nginx/static-file stage `docs/runbooks/deployment.md`'s
+      # staging stack uses) and runs the real Vite dev server instead of
+      # that stage's default `npm run build` -- this service existed
+      # before the Dockerfile did (docs/local-development.md documented
+      # `docker compose up web` as an alternative to `npm run dev`
+      # directly), and adding a Dockerfile for staging (CHECKLIST.md Phase
+      # 7A) must not silently turn this into a broken/misconfigured nginx
+      # container instead.
+      target: build
+    command: npm run dev -- --host 0.0.0.0
     env_file: .env
     depends_on:
       - api
@@ -153,6 +164,17 @@ services:
       - "5173:5173"
     volumes:
       - ./apps/web:/app
+      # An anonymous volume, mounted on top of the bind mount above at
+      # this one path -- Compose applies volumes in order, so this
+      # "wins" for node_modules specifically and keeps the image's own
+      # Linux-native install (e.g. @rollup/rollup-linux-x64-gnu) instead
+      # of exposing whatever platform-specific binaries the host's own
+      # node_modules has (Windows here). Without this, the bind mount
+      # above overlays the container's node_modules entirely and Vite
+      # fails immediately: "Cannot find module
+      # @rollup/rollup-linux-x64-gnu" -- hit for real while verifying
+      # this service actually starts, not a theoretical concern.
+      - /app/node_modules
 
 volumes:
   postgres_data:

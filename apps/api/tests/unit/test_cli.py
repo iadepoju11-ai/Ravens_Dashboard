@@ -1,8 +1,10 @@
 """Tests the `flask audit verify-all-tenants` command that a periodic
 scheduler is meant to call (CHECKLIST.md Phase 5) — no scheduler exists
-yet, but the command itself is real and tested.
+yet, but the command itself is real and tested. Also tests `flask seed
+staging` (CHECKLIST.md Phase 7A).
 """
 
+from app.cli import STAGING_TENANT_A_ID, STAGING_TENANT_B_ID
 from app.extensions import db
 from app.models.monitoring import MonitoringAlert
 from app.models.tenant import Tenant
@@ -55,3 +57,29 @@ def test_verify_all_tenants_alerts_and_exits_nonzero_on_a_broken_chain(app):
     assert len(alerts) == 1
     assert alerts[0].alert_type == "audit_chain_integrity_failure"
     assert alerts[0].severity == "critical"
+
+
+def test_seed_staging_creates_both_fixed_id_tenants(app):
+    runner = app.test_cli_runner()
+
+    result = runner.invoke(args=["seed", "staging"])
+
+    assert result.exit_code == 0
+    tenant_a = Tenant.query.filter_by(id=STAGING_TENANT_A_ID).first()
+    tenant_b = Tenant.query.filter_by(id=STAGING_TENANT_B_ID).first()
+    assert tenant_a is not None
+    assert tenant_b is not None
+    assert tenant_a.id != tenant_b.id
+    assert "created:" in result.output
+
+
+def test_seed_staging_is_idempotent(app):
+    runner = app.test_cli_runner()
+    runner.invoke(args=["seed", "staging"])
+
+    result = runner.invoke(args=["seed", "staging"])
+
+    assert result.exit_code == 0
+    assert Tenant.query.filter_by(id=STAGING_TENANT_A_ID).count() == 1
+    assert Tenant.query.filter_by(id=STAGING_TENANT_B_ID).count() == 1
+    assert "already seeded" in result.output

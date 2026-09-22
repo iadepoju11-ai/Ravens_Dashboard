@@ -9,6 +9,7 @@ import { FairnessPage } from "@/features/fairness/FairnessPage";
 import { ModelsPage } from "@/features/models/ModelsPage";
 import { MonitoringPage } from "@/features/monitoring/MonitoringPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
+import { ReviewsPage } from "@/features/reviews/ReviewsPage";
 import { ScorePage } from "@/features/score/ScorePage";
 import { oidcConfig } from "@/services/authConfig";
 import { AppShell } from "./AppShell";
@@ -28,6 +29,7 @@ export function App() {
               <Route path="models" element={<ModelsPage />} />
               <Route path="datasets" element={<DatasetsPage />} />
               <Route path="fairness" element={<FairnessPage />} />
+              <Route path="reviews" element={<ReviewsPage />} />
               <Route path="audit" element={<AuditPage />} />
               <Route path="monitoring" element={<MonitoringPage />} />
               <Route path="admin" element={<AdminPage />} />

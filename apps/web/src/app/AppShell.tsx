@@ -1,7 +1,6 @@
 import type { KeyboardEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { FloatingBackdrop } from "@/components/FloatingBackdrop";
 import {
   AdminIcon,
   AuditIcon,
@@ -12,6 +11,7 @@ import {
   HomeIcon,
   ModelsIcon,
   MonitoringIcon,
+  ReviewsIcon,
   ScoreIcon,
   SearchIcon,
   ShieldIcon,
@@ -27,6 +27,7 @@ const NAV_ITEMS = [
   { to: "/models", label: "Models", icon: ModelsIcon },
   { to: "/datasets", label: "Datasets", icon: DatasetsIcon },
   { to: "/fairness", label: "Fairness", icon: FairnessIcon },
+  { to: "/reviews", label: "Reviews", icon: ReviewsIcon },
   { to: "/audit", label: "Audit", icon: AuditIcon },
   { to: "/monitoring", label: "Monitoring", icon: MonitoringIcon },
   { to: "/admin", label: "Admin", icon: AdminIcon },
@@ -232,7 +233,6 @@ export function AppShell() {
           </div>
         </header>
         <main className="app-shell__content">
-          <FloatingBackdrop variant="ambient" />
           <Outlet />
         </main>
       </div>

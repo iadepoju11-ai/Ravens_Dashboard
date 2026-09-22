@@ -94,6 +94,16 @@ export function MonitoringIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function ReviewsIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M8 3.5h6.5L18 7v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z" />
+      <path d="M14 3.5V7h4" />
+      <path d="m8.5 13 2 2 4-4.5" />
+    </Icon>
+  );
+}
+
 export function AdminIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

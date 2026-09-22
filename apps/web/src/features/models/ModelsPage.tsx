@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AsyncSection } from "@/components/AsyncSection";
 import { useApiResource } from "@/hooks/useApiResource";
 import { useMutation } from "@/hooks/useMutation";
+import { hasPermission } from "@/services/permissions";
 import { useIdentity } from "@/services/useIdentity";
 import { approveModelVersion, deployModelVersion, fetchModels, registerModelVersion } from "./api";
 
@@ -12,7 +13,10 @@ function statusTone(status: string): string {
 }
 
 export function ModelsPage() {
-  const { accessToken } = useIdentity();
+  const { accessToken, roles } = useIdentity();
+  const canApprove = hasPermission(roles, "models:approve");
+  const canDeploy = hasPermission(roles, "models:deploy");
+  const canRegister = hasPermission(roles, "models:create");
   const modelsState = useApiResource(() => fetchModels(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
@@ -78,7 +82,7 @@ export function ModelsPage() {
                       <span className={`status-badge ${statusTone(mv.status)}`}>{mv.status}</span>
                     </td>
                     <td>
-                      {mv.status === "draft" && (
+                      {mv.status === "draft" && canApprove && (
                         <button
                           type="button"
                           className="button button--small"
@@ -88,7 +92,7 @@ export function ModelsPage() {
                           Approve
                         </button>
                       )}
-                      {mv.status === "approved" && (
+                      {mv.status === "approved" && canDeploy && (
                         <button
                           type="button"
                           className="button button--small"
@@ -114,37 +118,47 @@ export function ModelsPage() {
         </div>
       )}
 
-      <section className="page-section">
-        <h2>Register a model version</h2>
-        <form className="form-grid" onSubmit={handleRegister}>
-          <label className="field">
-            Model name
-            <input type="text" required value={name} onChange={(event) => setName(event.target.value)} />
-          </label>
-          <label className="field">
-            Version
-            <input type="text" required value={version} onChange={(event) => setVersion(event.target.value)} />
-          </label>
-          <label className="field">
-            Artifact URI
-            <input
-              type="text"
-              required
-              placeholder="file://./model_artifacts/..."
-              value={artifactUri}
-              onChange={(event) => setArtifactUri(event.target.value)}
-            />
-          </label>
-          <button type="submit" className="button button--primary" disabled={registerMutation.state.status === "loading"}>
-            {registerMutation.state.status === "loading" ? "Registering…" : "Register"}
-          </button>
-        </form>
-        {registerMutation.state.status === "error" && (
-          <div className="async-state async-state--error" role="alert">
-            {registerMutation.state.error}
-          </div>
-        )}
-      </section>
+      {canRegister ? (
+        <section className="page-section">
+          <h2>Register a model version</h2>
+          <form className="form-grid" onSubmit={handleRegister}>
+            <label className="field">
+              Model name
+              <input type="text" required value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label className="field">
+              Version
+              <input type="text" required value={version} onChange={(event) => setVersion(event.target.value)} />
+            </label>
+            <label className="field">
+              Artifact URI
+              <input
+                type="text"
+                required
+                placeholder="file://./model_artifacts/..."
+                value={artifactUri}
+                onChange={(event) => setArtifactUri(event.target.value)}
+              />
+            </label>
+            <button
+              type="submit"
+              className="button button--primary"
+              disabled={registerMutation.state.status === "loading"}
+            >
+              {registerMutation.state.status === "loading" ? "Registering…" : "Register"}
+            </button>
+          </form>
+          {registerMutation.state.status === "error" && (
+            <div className="async-state async-state--error" role="alert">
+              {registerMutation.state.error}
+            </div>
+          )}
+        </section>
+      ) : (
+        <p className="async-state async-state--empty">
+          Your role doesn't include registering model versions.
+        </p>
+      )}
     </div>
   );
 }

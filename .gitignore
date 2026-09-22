@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.staging.example
 
 # Internal planning notes — not for the public repo
 CHECKLIST.md

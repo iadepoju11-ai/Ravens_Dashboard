@@ -11,6 +11,7 @@ from app.security.permissions import (
     COMPLIANCE_OFFICER,
     CREDIT_ANALYST,
     DATA_PROTECTION_OFFICER,
+    ROLE_PERMISSIONS,
     AuthorizationError,
     has_permission,
     require_permission,
@@ -58,14 +59,22 @@ def test_every_role_can_read_its_own_tenant(role):
     assert has_permission(_identity(role), "tenant:read")
 
 
-def test_admin_has_read_only_dashboard_visibility_not_write_permissions():
-    # ADMIN can see what the Overview dashboard shows (decisions, audit,
-    # fairness) but must not gain the *write* permissions those roles
-    # carry just by virtue of being able to read the same data.
+def test_admin_has_access_to_every_page_and_feature():
+    # By explicit request (2026-09-18): admin is a superset of every other
+    # role's permissions, not read-only-dashboard-plus-management. Checked
+    # against the *other* roles' actual permission sets, not a hand-copied
+    # literal list, so this can't silently drift out of sync with them.
     identity = _identity(ADMIN)
-    assert not has_permission(identity, "decisions:create")
-    assert not has_permission(identity, "audit:verify")
-    assert not has_permission(identity, "models:approve")
+    all_other_permissions = (
+        ROLE_PERMISSIONS[CREDIT_ANALYST]
+        | ROLE_PERMISSIONS[COMPLIANCE_OFFICER]
+        | ROLE_PERMISSIONS[AUDITOR]
+        | ROLE_PERMISSIONS[DATA_PROTECTION_OFFICER]
+    )
+    for permission in all_other_permissions:
+        assert has_permission(identity, permission), f"admin is missing {permission}"
+    assert has_permission(identity, "users:manage")
+    assert has_permission(identity, "tenant:manage")
 
 
 @pytest.mark.parametrize(

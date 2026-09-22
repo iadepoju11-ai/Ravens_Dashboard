@@ -1,5 +1,21 @@
 import { apiFetch } from "@/services/apiClient";
-import type { AuditChainVerification, AuditEvent, AuditIntegrityCheckRecord } from "@/types/api";
+import type { AuditChainVerification, AuditEvent, AuditExportResponse, AuditIntegrityCheckRecord } from "@/types/api";
+
+export interface AuditExportScope {
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export function exportAuditEvents(
+  accessToken: string | undefined,
+  scope: AuditExportScope,
+): Promise<AuditExportResponse> {
+  const params = new URLSearchParams();
+  if (scope.dateFrom) params.set("date_from", scope.dateFrom);
+  if (scope.dateTo) params.set("date_to", scope.dateTo);
+  const query = params.toString();
+  return apiFetch(`/audit/export${query ? `?${query}` : ""}`, { accessToken });
+}
 
 export function fetchAuditEvents(accessToken: string | undefined): Promise<AuditEvent[]> {
   return apiFetch<{ events: AuditEvent[] }>("/audit/events", { accessToken }).then((r) => r.events);

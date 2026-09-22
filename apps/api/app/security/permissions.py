@@ -21,72 +21,79 @@ COMPLIANCE_OFFICER = "compliance_officer"
 AUDITOR = "auditor"
 DATA_PROTECTION_OFFICER = "data_protection_officer"
 
+_CREDIT_ANALYST_PERMISSIONS = frozenset(
+    {
+        "decisions:create",
+        "decisions:read",
+        "tenant:read",
+    }
+)
+
+_COMPLIANCE_OFFICER_PERMISSIONS = frozenset(
+    {
+        "decisions:read",
+        "models:read",
+        # No dedicated data-scientist/model-ops role exists among the
+        # five CreditGuard roles -- compliance_officer owns the whole
+        # model lifecycle (register -> approve -> deploy) for now,
+        # not just the approval step. Revisit if that changes. Same
+        # reasoning extends to registering the training data those
+        # models cite (datasets:create/read), and to model-risk
+        # monitoring (monitoring:read) -- both are part of "Models,
+        # governance and fairness", this role's stated remit.
+        "models:create",
+        "models:approve",
+        "models:deploy",
+        "datasets:read",
+        "datasets:create",
+        "monitoring:read",
+        "fairness:read",
+        "fairness:review",
+        # Review cases are opened automatically for a "refer" outcome or
+        # a failing governance/fairness check (review_service.py) --
+        # resolving them is part of the same "Models, governance and
+        # fairness" remit as fairness:review.
+        "review:read",
+        "review:resolve",
+        "tenant:read",
+    }
+)
+
+_AUDITOR_PERMISSIONS = frozenset(
+    {
+        "audit:read",
+        "audit:export",
+        "audit:verify",
+        "tenant:read",
+    }
+)
+
+_DATA_PROTECTION_OFFICER_PERMISSIONS = frozenset(
+    {
+        "datasets:read",
+        "audit:read",
+        "tenant:read",
+    }
+)
+
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    ADMIN: frozenset(
-        {
-            "users:manage",
-            "tenant:manage",
-            "tenant:read",
-            # Read-only visibility across the tenant's operational data --
-            # discovered as a real gap while building the Overview
-            # dashboard (apps/web): it needs decisions:read + audit:read +
-            # fairness:read together, and no single one of the other four
-            # roles holds all three (each is scoped to its own workflow on
-            # purpose). An administrator overseeing a tenant reasonably
-            # needs to see the same dashboard everyone else's data feeds,
-            # without gaining any of the *write* permissions those roles
-            # carry (decisions:create, models:approve, audit:verify, ...).
-            "decisions:read",
-            "audit:read",
-            "fairness:read",
-            "monitoring:read",
-        }
+    # Full access to every page and feature, by explicit request (2026-09-18)
+    # -- superset of every other role's permissions plus the two admin-only
+    # ones (users:manage, tenant:manage), rather than a hand-maintained list.
+    # Built as a union so a new permission added to any other role is
+    # automatically granted to admin too, with nothing to keep in sync by
+    # hand.
+    ADMIN: (
+        frozenset({"users:manage", "tenant:manage"})
+        | _CREDIT_ANALYST_PERMISSIONS
+        | _COMPLIANCE_OFFICER_PERMISSIONS
+        | _AUDITOR_PERMISSIONS
+        | _DATA_PROTECTION_OFFICER_PERMISSIONS
     ),
-    CREDIT_ANALYST: frozenset(
-        {
-            "decisions:create",
-            "decisions:read",
-            "tenant:read",
-        }
-    ),
-    COMPLIANCE_OFFICER: frozenset(
-        {
-            "decisions:read",
-            "models:read",
-            # No dedicated data-scientist/model-ops role exists among the
-            # five CreditGuard roles -- compliance_officer owns the whole
-            # model lifecycle (register -> approve -> deploy) for now,
-            # not just the approval step. Revisit if that changes. Same
-            # reasoning extends to registering the training data those
-            # models cite (datasets:create/read), and to model-risk
-            # monitoring (monitoring:read) -- both are part of "Models,
-            # governance and fairness", this role's stated remit.
-            "models:create",
-            "models:approve",
-            "models:deploy",
-            "datasets:read",
-            "datasets:create",
-            "monitoring:read",
-            "fairness:read",
-            "fairness:review",
-            "tenant:read",
-        }
-    ),
-    AUDITOR: frozenset(
-        {
-            "audit:read",
-            "audit:export",
-            "audit:verify",
-            "tenant:read",
-        }
-    ),
-    DATA_PROTECTION_OFFICER: frozenset(
-        {
-            "datasets:read",
-            "audit:read",
-            "tenant:read",
-        }
-    ),
+    CREDIT_ANALYST: _CREDIT_ANALYST_PERMISSIONS,
+    COMPLIANCE_OFFICER: _COMPLIANCE_OFFICER_PERMISSIONS,
+    AUDITOR: _AUDITOR_PERMISSIONS,
+    DATA_PROTECTION_OFFICER: _DATA_PROTECTION_OFFICER_PERMISSIONS,
 }
 
 

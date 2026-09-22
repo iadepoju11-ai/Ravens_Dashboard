@@ -4,6 +4,14 @@ Flask-Migrate==4.0.7
 Flask-JWT-Extended==4.6.0
 Flask-Cors==4.0.1
 
+# Vendor-neutral application metrics (CHECKLIST.md Phase 7B) -- the
+# Prometheus text exposition format (GET /metrics) is a de facto open
+# standard scraped by Prometheus, Grafana Agent, Datadog, and most other
+# observability vendors alike; nothing here is tied to any one of them.
+# Pure Python, no external service required to just collect metrics
+# in-process.
+prometheus-client==0.21.1
+
 # OIDC access-token verification (app/security/jwt_verifier.py) --
 # standard issuer/JWKS/audience/expiry checks against Keycloak locally
 # (any OIDC-compliant IdP in production, see docs/local-development.md).

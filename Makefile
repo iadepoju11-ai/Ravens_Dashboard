@@ -1,10 +1,43 @@
-.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint
+.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint staging-up staging-down staging-seed staging-logs staging-ps staging-smoke-test staging-redeploy
 
 up:
 	docker compose up --build
 
 down:
 	docker compose down
+
+# --- Staging (CHECKLIST.md Phase 7A) ---
+# Separate compose file/project (docker-compose.staging.yml, project name
+# creditguard-staging) so it can run alongside the dev stack above without
+# port/volume collisions. Secrets come from .env.staging (gitignored --
+# copy .env.staging.example and fill in real values first, see
+# docs/runbooks/deployment.md for the full procedure including rollback).
+
+staging-up:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --build
+
+# Idempotent -- safe to run after every staging-up, not just the first.
+staging-seed:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging exec api flask seed staging
+
+staging-down:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging down
+
+staging-logs:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f
+
+staging-ps:
+	docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+
+# Requires `pip install -r tests/smoke/requirements.txt` once, and a
+# staging stack that's already up (staging-up) and seeded (staging-seed).
+staging-smoke-test:
+	cd tests/smoke && python -m pytest . -v
+
+# The whole redeploy sequence in one command -- see
+# docs/runbooks/deployment.md for what to do if this fails partway
+# through (rollback procedure).
+staging-redeploy: staging-up staging-seed staging-smoke-test
 
 api-install:
 	cd apps/api && pip install -r requirements.txt

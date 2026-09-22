@@ -53,9 +53,32 @@ def _provision_user(subject: str, claims: dict) -> User:
     if tenant is None or not tenant.is_active:
         raise AuthorizationError("Unknown or inactive tenant")
 
+    email = claims.get("email") or f"{subject}@oidc.local"
+
+    # A row can already exist for this (tenant, email) with a different or
+    # missing oidc_subject -- most concretely, its oidc_subject reverted to
+    # NULL across a `flask db downgrade`/`upgrade` round trip that crossed
+    # the migration adding that column (a real failure mode, reproduced
+    # and documented in docs/runbooks/deployment.md's rollback section,
+    # not a hypothetical one). Re-link it to this token's subject instead
+    # of INSERTing a second row, which would collide on the
+    # uq_user_tenant_email unique constraint and fail the whole request
+    # with an unhandled IntegrityError -- confirmed that's exactly what
+    # used to happen here.
+    existing = User.query.filter_by(tenant_id=tenant.id, email=email).first()
+    if existing is not None:
+        if not existing.is_active:
+            # Same rule resolve_identity already applies to the
+            # by-oidc_subject lookup path -- re-linking must not become a
+            # backdoor around a disabled account.
+            raise AuthorizationError("This account has been disabled")
+        existing.oidc_subject = subject
+        db.session.commit()
+        return existing
+
     user = User(
         tenant_id=tenant.id,
-        email=claims.get("email") or f"{subject}@oidc.local",
+        email=email,
         full_name=claims.get("name"),
         oidc_subject=subject,
     )

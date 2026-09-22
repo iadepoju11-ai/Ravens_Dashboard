@@ -6,10 +6,17 @@ import type {
   HealthStatus,
   MonitoringAlert,
   MonitoringMetrics,
+  ObservabilitySummary,
 } from "@/types/api";
 
 export function fetchMetrics(accessToken: string | undefined): Promise<MonitoringMetrics> {
   return apiFetch<{ metrics: MonitoringMetrics }>("/monitoring/metrics", { accessToken }).then((r) => r.metrics);
+}
+
+export function fetchObservability(accessToken: string | undefined): Promise<ObservabilitySummary> {
+  return apiFetch<{ observability: ObservabilitySummary }>("/monitoring/observability", { accessToken }).then(
+    (r) => r.observability,
+  );
 }
 
 export function fetchRecentDecisions(accessToken: string | undefined): Promise<Decision[]> {

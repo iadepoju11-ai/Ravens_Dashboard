@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@/hooks/useMutation";
+import { hasPermission } from "@/services/permissions";
 import { useIdentity } from "@/services/useIdentity";
 import { scoreApplication } from "./api";
 
@@ -20,7 +21,8 @@ function coerceFeatureValue(value: string): number | string {
 }
 
 export function ScorePage() {
-  const { accessToken } = useIdentity();
+  const { accessToken, roles } = useIdentity();
+  const canScore = hasPermission(roles, "decisions:create");
   const [applicationReference, setApplicationReference] = useState("");
   const [rows, setRows] = useState<FeatureRow[]>([{ name: "", value: "" }]);
   const { state, run, reset } = useMutation(scoreApplication);
@@ -46,54 +48,58 @@ export function ScorePage() {
         <h1>Score an application</h1>
       </div>
 
-      <form className="form-grid" onSubmit={handleSubmit}>
-        <label className="field">
-          Application reference
-          <input
-            type="text"
-            required
-            value={applicationReference}
-            onChange={(event) => setApplicationReference(event.target.value)}
-          />
-        </label>
+      {canScore ? (
+        <form className="form-grid" onSubmit={handleSubmit}>
+          <label className="field">
+            Application reference
+            <input
+              type="text"
+              required
+              value={applicationReference}
+              onChange={(event) => setApplicationReference(event.target.value)}
+            />
+          </label>
 
-        <fieldset>
-          <legend>Features</legend>
-          {rows.map((row, index) => (
-            <div className="feature-row" key={index}>
-              <input
-                type="text"
-                placeholder="feature name"
-                aria-label="Feature name"
-                value={row.name}
-                onChange={(event) => updateRow(index, "name", event.target.value)}
-              />
-              <input
-                type="text"
-                placeholder="value"
-                aria-label="Feature value"
-                value={row.value}
-                onChange={(event) => updateRow(index, "value", event.target.value)}
-              />
-              <button
-                type="button"
-                className="button button--small"
-                onClick={() => removeRow(index)}
-                disabled={rows.length === 1}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button type="button" className="button button--small" onClick={addRow}>
-            Add feature
+          <fieldset>
+            <legend>Features</legend>
+            {rows.map((row, index) => (
+              <div className="feature-row" key={index}>
+                <input
+                  type="text"
+                  placeholder="feature name"
+                  aria-label="Feature name"
+                  value={row.name}
+                  onChange={(event) => updateRow(index, "name", event.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="value"
+                  aria-label="Feature value"
+                  value={row.value}
+                  onChange={(event) => updateRow(index, "value", event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="button button--small"
+                  onClick={() => removeRow(index)}
+                  disabled={rows.length === 1}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button type="button" className="button button--small" onClick={addRow}>
+              Add feature
+            </button>
+          </fieldset>
+
+          <button type="submit" className="button button--primary" disabled={state.status === "loading"}>
+            {state.status === "loading" ? "Scoring…" : "Score application"}
           </button>
-        </fieldset>
-
-        <button type="submit" className="button button--primary" disabled={state.status === "loading"}>
-          {state.status === "loading" ? "Scoring…" : "Score application"}
-        </button>
-      </form>
+        </form>
+      ) : (
+        <p className="async-state async-state--empty">Your role doesn't include scoring applications.</p>
+      )}
 
       {state.status === "error" && (
         <div className="async-state async-state--error" role="alert">

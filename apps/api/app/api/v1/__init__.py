@@ -1,6 +1,6 @@
 from flask import Flask
 
-from app.api.v1 import audit, auth, datasets, decisions, fairness, health, models, monitoring, tenants
+from app.api.v1 import audit, auth, datasets, decisions, fairness, health, models, monitoring, reviews, tenants
 
 API_V1_PREFIX = "/api/v1"
 
@@ -15,3 +15,4 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(fairness.bp, url_prefix=API_V1_PREFIX)
     app.register_blueprint(audit.bp, url_prefix=API_V1_PREFIX)
     app.register_blueprint(monitoring.bp, url_prefix=API_V1_PREFIX)
+    app.register_blueprint(reviews.bp, url_prefix=API_V1_PREFIX)

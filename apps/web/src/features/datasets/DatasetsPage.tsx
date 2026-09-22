@@ -2,11 +2,13 @@ import { useState } from "react";
 import { AsyncSection } from "@/components/AsyncSection";
 import { useApiResource } from "@/hooks/useApiResource";
 import { useMutation } from "@/hooks/useMutation";
+import { hasPermission } from "@/services/permissions";
 import { useIdentity } from "@/services/useIdentity";
 import { fetchDatasets, registerDataset } from "./api";
 
 export function DatasetsPage() {
-  const { accessToken } = useIdentity();
+  const { accessToken, roles } = useIdentity();
+  const canRegister = hasPermission(roles, "datasets:create");
   const datasetsState = useApiResource(() => fetchDatasets(accessToken), [accessToken], {
     isEmpty: (data) => data.length === 0,
   });
@@ -62,31 +64,41 @@ export function DatasetsPage() {
         )}
       </AsyncSection>
 
-      <section className="page-section">
-        <h2>Register a dataset version</h2>
-        <form className="form-grid" onSubmit={handleSubmit}>
-          <label className="field">
-            Dataset name
-            <input type="text" required value={name} onChange={(event) => setName(event.target.value)} />
-          </label>
-          <label className="field">
-            Version
-            <input type="text" required value={version} onChange={(event) => setVersion(event.target.value)} />
-          </label>
-          <label className="field">
-            URI
-            <input type="text" required value={uri} onChange={(event) => setUri(event.target.value)} />
-          </label>
-          <button type="submit" className="button button--primary" disabled={registerMutation.state.status === "loading"}>
-            {registerMutation.state.status === "loading" ? "Registering…" : "Register"}
-          </button>
-        </form>
-        {registerMutation.state.status === "error" && (
-          <div className="async-state async-state--error" role="alert">
-            {registerMutation.state.error}
-          </div>
-        )}
-      </section>
+      {canRegister ? (
+        <section className="page-section">
+          <h2>Register a dataset version</h2>
+          <form className="form-grid" onSubmit={handleSubmit}>
+            <label className="field">
+              Dataset name
+              <input type="text" required value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label className="field">
+              Version
+              <input type="text" required value={version} onChange={(event) => setVersion(event.target.value)} />
+            </label>
+            <label className="field">
+              URI
+              <input type="text" required value={uri} onChange={(event) => setUri(event.target.value)} />
+            </label>
+            <button
+              type="submit"
+              className="button button--primary"
+              disabled={registerMutation.state.status === "loading"}
+            >
+              {registerMutation.state.status === "loading" ? "Registering…" : "Register"}
+            </button>
+          </form>
+          {registerMutation.state.status === "error" && (
+            <div className="async-state async-state--error" role="alert">
+              {registerMutation.state.error}
+            </div>
+          )}
+        </section>
+      ) : (
+        <p className="async-state async-state--empty">
+          Your role doesn't include registering dataset versions.
+        </p>
+      )}
     </div>
   );
 }

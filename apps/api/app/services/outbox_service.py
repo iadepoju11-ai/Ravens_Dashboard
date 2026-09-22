@@ -30,6 +30,7 @@ Handles:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -39,9 +40,11 @@ from app.extensions import db
 from app.models.base import utcnow
 from app.models.monitoring import MonitoringAlert
 from app.models.outbox import OutboxEvent
+from app.observability.metrics import OUTBOX_EVENTS_PUBLISHED_TOTAL
 
 MAX_ATTEMPTS = 10
 SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
 
 
 class _FutureLike(Protocol):
@@ -149,6 +152,7 @@ def publish_pending_events(producer: KafkaProducerLike | None = None) -> list[Pu
                 event.status = "published"
                 event.published_at = utcnow()
                 db.session.commit()
+                OUTBOX_EVENTS_PUBLISHED_TOTAL.labels(status="published").inc()
                 outcomes.append(PublishOutcome(event_id=event.id, event_type=event.event_type, status="published"))
     finally:
         if owns_producer and active_producer is not None and hasattr(active_producer, "close"):
@@ -175,7 +179,13 @@ def _record_failure(event: OutboxEvent, error: str) -> PublishOutcome:
             )
         )
         db.session.commit()
+        OUTBOX_EVENTS_PUBLISHED_TOTAL.labels(status="failed").inc()
+        logger.error(
+            "outbox event permanently failed",
+            extra={"event_id": event.id, "event_type": event.event_type, "attempts": event.attempts},
+        )
         return PublishOutcome(event_id=event.id, event_type=event.event_type, status="failed")
 
     db.session.commit()
+    OUTBOX_EVENTS_PUBLISHED_TOTAL.labels(status="retry").inc()
     return PublishOutcome(event_id=event.id, event_type=event.event_type, status="retry")

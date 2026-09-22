@@ -1,13 +1,18 @@
-"""CLI commands: `flask audit verify-all-tenants`, `flask events publish-outbox`.
+"""CLI commands: `flask audit verify-all-tenants`, `flask events publish-outbox`,
+`flask seed staging`.
 
-Neither is a scheduler — this project has none yet (CLAUDE.md lists
-Celery/RQ as the intended tech, but nothing is wired up; picking one is a
-real architecture decision, not something to bolt on unilaterally
-alongside audit hardening or the outbox). Both commands are what a
+The first two aren't a scheduler — this project has none yet (CLAUDE.md
+lists Celery/RQ as the intended tech, but nothing is wired up; picking
+one is a real architecture decision, not something to bolt on
+unilaterally alongside audit hardening or the outbox). Both are what a
 scheduler would call: any external one (cron, a Kubernetes CronJob,
 GitHub Actions on a schedule) can run them periodically. Both exit
 non-zero on failure so a scheduler can alert on the run itself, in
 addition to the MonitoringAlert rows they write.
+
+`seed staging` is the one piece of state a fresh deploy can't get from
+migrations alone (CHECKLIST.md Phase 7A: "deployable... without
+undocumented manual configuration") — see its own docstring.
 """
 
 from __future__ import annotations
@@ -20,6 +25,15 @@ from app.models.monitoring import MonitoringAlert
 from app.models.tenant import Tenant
 from app.services.audit_service import verify_chain
 from app.services.outbox_service import publish_pending_events
+
+# Fixed, non-random ids -- must match infra/keycloak/creditguard-realm.json's
+# seeded `smoke-admin`/`smoke-other-tenant` users' `tenant_id` attribute
+# exactly, so a token issued for either user resolves (via
+# resolve_tenant_by_id) to a tenant that actually exists. Two tenants, not
+# one, so the staging smoke-test suite can prove cross-tenant isolation,
+# not just "auth works".
+STAGING_TENANT_A_ID = "11111111-1111-4111-8111-111111111111"
+STAGING_TENANT_B_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def register_cli(app: Flask) -> None:
@@ -87,3 +101,36 @@ def register_cli(app: Flask) -> None:
 
         if failed:
             raise SystemExit(1)
+
+    @app.cli.group("seed")
+    def seed_group():
+        """Seed commands for a fresh environment."""
+
+    @seed_group.command("staging")
+    def seed_staging():
+        """Creates the two fixed-id tenants the staging smoke-test suite
+        (tests/smoke/) and its Keycloak users
+        (infra/keycloak/creditguard-realm.json's `smoke-admin`/
+        `smoke-other-tenant`) are wired to. Run once after `flask db
+        upgrade` on a fresh deploy — docker-compose.staging.yml's
+        `migrate` service does not call this automatically, since seeding
+        is idempotent but a schema migration failing partway through
+        should never be masked by a seed step that "succeeds" against a
+        half-migrated database.
+
+        Safe to re-run: does nothing for a tenant id that already exists,
+        never updates or duplicates.
+        """
+        seeds = [
+            (STAGING_TENANT_A_ID, "Staging Smoke Bank", "staging-smoke-bank"),
+            (STAGING_TENANT_B_ID, "Staging Smoke Bank B", "staging-smoke-bank-b"),
+        ]
+        created = []
+        for tenant_id, name, slug in seeds:
+            if Tenant.query.filter_by(id=tenant_id).first() is not None:
+                continue
+            db.session.add(Tenant(id=tenant_id, name=name, slug=slug))
+            created.append(slug)
+
+        db.session.commit()
+        click.echo(f"created: {', '.join(created)}" if created else "already seeded, nothing to do")

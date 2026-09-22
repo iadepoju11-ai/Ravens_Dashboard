@@ -4,6 +4,7 @@ from app.infrastructure.security.tenant_context import TenantResolutionError, re
 from app.models.decision import Decision
 from app.models.model import Model, ModelVersion
 from app.models.monitoring import MonitoringAlert
+from app.observability.summary import build_observability_summary
 from app.security.authentication import authenticate
 from app.security.permissions import require_permission
 
@@ -64,11 +65,35 @@ def list_alerts():
     except TenantResolutionError as exc:
         return jsonify(error=exc.message), exc.status_code
 
-    # Alerts are raised by the monitoring worker (ERD Section 3.1), not yet
-    # implemented, so this will be empty until that worker exists.
+    # Real writers, not a placeholder: audit-chain verification failures
+    # (app/cli.py), outbox publish failures, and fairness threshold
+    # breaches (app/api/v1/fairness.py) all raise these — see each
+    # MonitoringAlert( call site for exactly when.
     alerts = (
         MonitoringAlert.query.filter_by(tenant_id=tenant.id)
         .order_by(MonitoringAlert.created_at.desc())
         .all()
     )
     return jsonify(alerts=[a.to_dict() for a in alerts])
+
+
+@bp.get("/monitoring/observability")
+def get_observability():
+    """Process-level operational metrics (HTTP throughput/latency/errors,
+    scoring/model-inference/explanation duration, DB query stats, outbox
+    publish outcomes, governance/review counts) — CHECKLIST.md Phase 7B.
+
+    Deliberately NOT tenant-scoped data, unlike every other endpoint in
+    this blueprint: these are in-process Prometheus counters for the
+    whole running container (see app/observability/metrics.py), the same
+    numbers any tenant's requests contribute to and that GET /metrics
+    exposes in raw Prometheus format for a real Prometheus/Grafana
+    scrape. Gated by monitoring:read (the same permission the
+    tenant-scoped endpoints above use) because it's still operational
+    visibility into "is the platform healthy", not a tenant data leak —
+    no per-tenant breakdown is included or derivable from these numbers.
+    """
+    identity = authenticate()
+    require_permission(identity, "monitoring:read")
+
+    return jsonify(observability=build_observability_summary())

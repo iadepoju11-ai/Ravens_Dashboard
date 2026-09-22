@@ -14,6 +14,8 @@ real trained artifact.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 
 from app.extensions import db
@@ -21,11 +23,21 @@ from app.models.decision import Decision
 from app.models.explanation import Explanation
 from app.models.model import ModelVersion
 from app.models.tenant import Tenant
+from app.observability.metrics import (
+    EXPLANATION_DURATION_SECONDS,
+    MODEL_INFERENCE_DURATION_SECONDS,
+    SCORING_DURATION_SECONDS,
+    SCORING_ERRORS_TOTAL,
+    SCORING_REQUESTS_TOTAL,
+)
 from app.services import audit_service, outbox_service
+from app.services.governance_service import evaluate_governance
 from app.services.model_runtime import ModelRuntime
+from app.services.review_service import maybe_open_review_case
 from app.services.runtime_resolver import resolve_runtime
 
 _MAX_FEATURES = 200
+logger = logging.getLogger(__name__)
 
 
 class ScoringValidationError(Exception):
@@ -75,28 +87,57 @@ class ScoringService:
         request_id: str,
         model_version_id: str | None = None,
     ) -> ScoringResult:
+        request_start = time.perf_counter()
+
         existing = self._find_existing(tenant, request_id)
         if existing is not None:
             explanation = Explanation.query.filter_by(decision_id=existing.id).first()
+            SCORING_REQUESTS_TOTAL.labels(outcome=existing.outcome).inc()
+            SCORING_DURATION_SECONDS.observe(time.perf_counter() - request_start)
+            logger.info(
+                "scoring request replayed",
+                extra={"decision_id": existing.id, "outcome": existing.outcome, "idempotent_replay": True},
+            )
             return ScoringResult(decision=existing, explanation=explanation, created=False)
 
         self._validate_application_reference(application_reference)
         self._validate_features(features)
         model_version = self._resolve_model_version(tenant, model_version_id)
+        self._validate_features_against_schema(features, model_version)
 
         try:
             runtime = self._runtime_override or resolve_runtime(model_version)
+            runtime_label = type(runtime).__name__
+
+            inference_start = time.perf_counter()
             prediction = runtime.predict(features)
+            MODEL_INFERENCE_DURATION_SECONDS.labels(runtime=runtime_label).observe(
+                time.perf_counter() - inference_start
+            )
+
             outcome = self._decide_outcome(prediction.score)
+
+            explanation_start = time.perf_counter()
             explanation_result = runtime.explain(features, prediction)
+            EXPLANATION_DURATION_SECONDS.labels(method=explanation_result.method).observe(
+                time.perf_counter() - explanation_start
+            )
         except ScoringRuntimeError:
+            SCORING_ERRORS_TOTAL.inc()
+            logger.error("scoring runtime error", extra={"model_version_id": model_version.id})
             raise
         except Exception:
-            # Deliberately discard the original exception: it may carry
-            # internals (model paths, DB details) that shouldn't reach the
-            # API caller. A failed score must return an explicit error, not
-            # a misleading success.
+            # Deliberately discard the original exception from the API
+            # response: it may carry internals (model paths, DB details)
+            # that shouldn't reach the caller. It's still logged here in
+            # full, server-side only, before being discarded.
             self.session.rollback()
+            SCORING_ERRORS_TOTAL.inc()
+            logger.error(
+                "scoring runtime error (unexpected exception)",
+                exc_info=True,
+                extra={"model_version_id": model_version.id},
+            )
             raise ScoringRuntimeError() from None
 
         decision = Decision(
@@ -118,6 +159,13 @@ class ScoringService:
             feature_attributions={c.feature_name: c.value for c in explanation_result.contributions},
         )
         self.session.add(explanation)
+
+        governance_result = evaluate_governance(model_version.id, decision.id)
+        self.session.add(governance_result)
+
+        review_case = maybe_open_review_case(tenant.id, decision.id, outcome, governance_result.passed)
+        if review_case:
+            self.session.add(review_case)
 
         audit_service.record_event(
             tenant_id=tenant.id,
@@ -156,11 +204,11 @@ class ScoringService:
             },
         )
         # Distinct from decision.created.v1: marks the whole /score
-        # workflow (scoring + explanation + audit) as finished, not just
-        # that the Decision row exists. Fires immediately after it today
-        # since there's no async governance step yet (ERD Phase 3's
-        # GovernanceResult is still schema-only) -- the two events will
-        # diverge in timing once one exists.
+        # workflow (scoring + explanation + governance + audit) as
+        # finished, not just that the Decision row exists. Governance is
+        # a synchronous check today (evaluate_governance, above), so this
+        # still fires immediately after decision.created.v1 -- the two
+        # will diverge in timing if governance ever becomes async.
         outbox_service.enqueue_event(
             tenant_id=tenant.id,
             event_type="decision.completed.v1",
@@ -171,6 +219,20 @@ class ScoringService:
         )
 
         self.session.commit()
+
+        SCORING_REQUESTS_TOTAL.labels(outcome=outcome).inc()
+        SCORING_DURATION_SECONDS.observe(time.perf_counter() - request_start)
+        logger.info(
+            "scoring request completed",
+            extra={
+                "decision_id": decision.id,
+                "model_version_id": model_version.id,
+                "outcome": outcome,
+                "governance_passed": governance_result.passed,
+                "review_case_opened": review_case is not None,
+            },
+        )
+
         return ScoringResult(decision=decision, explanation=explanation, created=True)
 
     def _find_existing(self, tenant: Tenant, request_id: str) -> Decision | None:
@@ -192,12 +254,40 @@ class ScoringService:
             if not isinstance(name, str) or not name:
                 raise ScoringValidationError("feature names must be non-empty strings")
             # Numeric/string/bool/null only — no nested objects or arrays.
-            # A fixed per-model-version feature schema (required features,
-            # types, ranges, unexpected-feature rejection) is ERD Phase 4
-            # work, once the real ModelRuntime defines what each model
-            # version actually expects.
+            # Per-model-version schema checks (unknown features, wrong
+            # type) happen in _validate_features_against_schema, once the
+            # model version is resolved.
             if not isinstance(value, (int, float, str, bool)) and value is not None:
                 raise ScoringValidationError(f"feature '{name}' has an unsupported value type")
+
+    def _validate_features_against_schema(self, features: dict, model_version: ModelVersion) -> None:
+        """Rejects feature names the model version doesn't expect, and
+        numeric features sent as the wrong type. Only enforced when the
+        model version actually recorded a feature schema
+        (`metrics["features"]`, written by `POST /models` — see
+        `apps/workers/ml/pipeline.py`'s metadata output) — a version
+        registered without one (every test fixture, and any version
+        registered before this existed) resolves to `PlaceholderRuntime`
+        and has nothing to validate against, same convention as
+        `runtime_resolver.py`. Range checks are not implemented: no
+        per-feature min/max is recorded anywhere yet.
+        """
+        schema = (model_version.metrics or {}).get("features")
+        if not schema:
+            return
+
+        numeric_fields = set(schema.get("numeric", []))
+        categorical_fields = set(schema.get("categorical", []))
+        known_fields = numeric_fields | categorical_fields
+
+        unknown = sorted(set(features) - known_fields)
+        if unknown:
+            raise ScoringValidationError(f"Unknown feature(s) for this model version: {unknown}")
+
+        for name in numeric_fields & set(features):
+            value = features[name]
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                raise ScoringValidationError(f"feature '{name}' must be numeric for this model version")
 
     def _resolve_model_version(self, tenant: Tenant, model_version_id: str | None) -> ModelVersion:
         if model_version_id:

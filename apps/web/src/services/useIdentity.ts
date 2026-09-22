@@ -17,8 +17,31 @@ export interface Identity {
   isAuthenticated: boolean;
   accessToken: string | undefined;
   email: string | undefined;
+  // Decoded client-side from the access token's own payload, without
+  // verifying its signature -- fine for a UI hint (which buttons to show),
+  // never a security boundary. The backend independently verifies the
+  // token and re-derives permissions itself (app/security/permissions.py)
+  // on every request regardless of what the UI decided to render.
+  roles: readonly string[];
   login: () => void;
   logout: () => void;
+}
+
+function decodeRolesFromAccessToken(accessToken: string | undefined): readonly string[] {
+  const payloadSegment = accessToken?.split(".")[1];
+  if (!payloadSegment) return [];
+
+  try {
+    const base64 = payloadSegment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const claims = JSON.parse(atob(padded)) as { realm_access?: { roles?: string[] } };
+    return claims.realm_access?.roles ?? [];
+  } catch {
+    // A malformed/unexpected token shape degrades to "no roles" (every
+    // gated action stays hidden) rather than throwing and breaking the
+    // whole page -- the backend's own 403 is still the real guard.
+    return [];
+  }
 }
 
 export function useIdentity(): Identity {
@@ -29,6 +52,7 @@ export function useIdentity(): Identity {
     isAuthenticated: auth.isAuthenticated,
     accessToken: auth.user?.access_token,
     email: auth.user?.profile.email,
+    roles: decodeRolesFromAccessToken(auth.user?.access_token),
     login: () => {
       void auth.signinRedirect();
     },

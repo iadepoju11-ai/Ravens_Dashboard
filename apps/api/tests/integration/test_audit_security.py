@@ -168,3 +168,88 @@ def test_integrity_status_reports_the_last_check_without_running_a_new_one(clien
     client.get("/api/v1/audit/integrity-status", headers=headers)
     count_after = AuditIntegrityCheck.query.filter_by(tenant_id=tenant.id).count()
     assert count_after == count_before
+
+
+def test_export_requires_the_audit_export_permission(client, app, auth_headers):
+    tenant = _create_tenant("audit-export-perms-bank")
+    _record_events(tenant.id, 2)
+
+    response = client.get(
+        "/api/v1/audit/export", headers=auth_headers(tenant.id, roles=("credit_analyst",))
+    )
+
+    assert response.status_code == 403
+
+
+def test_export_returns_every_event_with_its_payload(client, app, auth_headers):
+    tenant = _create_tenant("audit-export-bank")
+    _record_events(tenant.id, 3)
+
+    response = client.get(
+        "/api/v1/audit/export", headers=auth_headers(tenant.id, roles=("auditor",))
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["events"]) == 3
+    # AuditEvent.to_dict() alone never includes payload (see
+    # GET /audit/events) -- the export is the one place it's included,
+    # since it's the actual audit content and is already free of raw
+    # personal data by construction (record_event's own payloads never
+    # carry raw applicant features).
+    assert all("payload" in event for event in body["events"])
+    assert body["meta"]["event_count"] == 3
+    assert body["meta"]["exported_by"]
+
+
+def test_export_scoped_by_date_range_excludes_events_outside_it(client, app, auth_headers):
+    tenant = _create_tenant("audit-export-scoped-bank")
+    events = _record_events(tenant.id, 3)
+
+    # Push the first event's timestamp well into the past so a date_from
+    # filter can genuinely exclude it.
+    events[0].created_at = events[0].created_at - timedelta(days=30)
+    db.session.commit()
+
+    cutoff = (events[0].created_at + timedelta(days=1)).isoformat()
+    response = client.get(
+        f"/api/v1/audit/export?date_from={cutoff}", headers=auth_headers(tenant.id, roles=("auditor",))
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert len(body["events"]) == 2
+    assert events[0].id not in {event["id"] for event in body["events"]}
+    assert body["meta"]["scope"]["date_from"] == cutoff
+
+
+def test_export_rejects_an_invalid_date(client, app, auth_headers):
+    tenant = _create_tenant("audit-export-bad-date-bank")
+    _record_events(tenant.id, 1)
+
+    response = client.get(
+        "/api/v1/audit/export?date_from=not-a-date", headers=auth_headers(tenant.id, roles=("auditor",))
+    )
+
+    assert response.status_code == 400
+
+
+def test_export_itself_is_recorded_as_a_chained_audit_event(client, app, auth_headers):
+    tenant = _create_tenant("audit-export-self-log-bank")
+    _record_events(tenant.id, 2)
+    headers = auth_headers(tenant.id, roles=("auditor",))
+
+    response = client.get("/api/v1/audit/export", headers=headers)
+    export_event_id = response.get_json()["meta"]["export_event_id"]
+
+    # The export action is itself part of the tamper-evident chain, not
+    # a separate access log -- so verifying the chain must see it, and it
+    # must not have appeared in its own export's results.
+    assert export_event_id not in {event["id"] for event in response.get_json()["events"]}
+    exported_event = AuditEvent.query.filter_by(id=export_event_id).first()
+    assert exported_event is not None
+    assert exported_event.event_type == "audit.export"
+
+    verify_response = client.get("/api/v1/audit/verify-chain", headers=headers)
+    assert verify_response.get_json()["valid"] is True
+    assert verify_response.get_json()["events_checked"] == 3

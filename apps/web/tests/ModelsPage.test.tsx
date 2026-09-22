@@ -1,10 +1,21 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelsPage } from "@/features/models/ModelsPage";
+import { useIdentity } from "@/services/useIdentity";
 
-vi.mock("@/services/useIdentity", () => ({
-  useIdentity: () => ({ accessToken: "test-access-token" }),
-}));
+vi.mock("@/services/useIdentity", () => ({ useIdentity: vi.fn() }));
+
+function mockIdentity(roles: string[]) {
+  vi.mocked(useIdentity).mockReturnValue({
+    isLoading: false,
+    isAuthenticated: true,
+    accessToken: "test-access-token",
+    email: "compliance@example.com",
+    roles,
+    login: vi.fn(),
+    logout: vi.fn(),
+  });
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }));
@@ -36,6 +47,7 @@ describe("ModelsPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("lists model versions and approves a draft one", async () => {
+    mockIdentity(["compliance_officer"]);
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         expect(url).toContain("/models/v1/approve");
@@ -58,6 +70,7 @@ describe("ModelsPage", () => {
   });
 
   it("shows a clear message when registering fails", async () => {
+    mockIdentity(["compliance_officer"]);
     vi.stubGlobal(
       "fetch",
       vi.fn((_url: string, init?: RequestInit) => {
@@ -76,5 +89,17 @@ describe("ModelsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^register$/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/required/i));
+  });
+
+  it("hides the approve action and the register form for a role without models:approve/models:create", async () => {
+    mockIdentity(["credit_analyst"]);
+    vi.stubGlobal("fetch", vi.fn(() => jsonResponse(MODELS_RESPONSE)));
+
+    render(<ModelsPage />);
+
+    await waitFor(() => expect(screen.getByText("credit-risk")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^register$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/doesn't include registering model versions/i)).toBeInTheDocument();
   });
 });

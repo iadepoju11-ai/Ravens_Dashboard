@@ -1,0 +1,167 @@
+# Staging deployment stack (CHECKLIST.md Phase 7A). Deliberately a
+# separate compose file, not a profile on docker-compose.yml: that file
+# is dev-only by design (bind-mounted source for hot reload, well-known
+# public dev passwords, host ports chosen only to avoid colliding with a
+# second local Postgres/Kafka). This stack runs *built images* (no bind
+# mounts -- what you deploy is exactly what was tested), reads secrets
+# from .env.staging (never committed, see .env.staging.example), and runs
+# migrations as an explicit deploy step before the API ever starts.
+#
+# Uses different host ports than docker-compose.yml on purpose, so both
+# stacks can run side by side on the same machine without conflict:
+#   dev        -> staging
+#   postgres   5433 -> 5533
+#   keycloak   8081 -> 8181
+#   kafka      9093 -> 9193
+#   api        5000 -> 5100
+#   web        5173 -> 8090 (built + nginx, not the Vite dev server)
+#
+# No Kafka consumer is started here (none exists yet -- see CHECKLIST.md);
+# Kafka/Zookeeper still run because KAFKA_ENABLED can be flipped on for
+# the outbox publisher (`flask events publish-outbox`) without a second
+# deploy.
+#
+# See docs/runbooks/deployment.md for the full deploy/rollback procedure
+# and docs/backup-restore.md for the Postgres volume that command implies
+# taking care of.
+
+name: creditguard-staging
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: creditguard
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD:?DB_OWNER_PASSWORD must be set in .env.staging}
+      POSTGRES_DB: creditguard
+    ports:
+      - "5533:5432"
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U creditguard -d creditguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9193:9092"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env.staging}
+      # Pinned to this stack's own host-side port (8181) so tokens carry
+      # a consistent `iss` regardless of which network path issued them
+      # -- same reasoning as docker-compose.yml's dev stack, see
+      # .env.staging.example's OIDC_ISSUER comment.
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8181"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    volumes:
+      - ./infra/keycloak/creditguard-realm.json:/opt/keycloak/data/import/creditguard-realm.json
+      - staging_keycloak_data:/opt/keycloak/data
+    ports:
+      - "8181:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/creditguard HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 'HTTP/1.1 200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # Runs the real Alembic migration path (owner role, full DDL) as an
+  # explicit one-shot deploy step, then exits -- `api` below waits for it
+  # to *complete successfully*, not just start, so the app container never
+  # comes up against a schema it doesn't match. This is what makes
+  # "migrations are part of deployment" true rather than a documented
+  # manual step someone has to remember.
+  migrate:
+    build:
+      context: ./apps/api
+    env_file: .env.staging
+    environment:
+      DATABASE_URL: postgresql://creditguard:${DB_OWNER_PASSWORD:?DB_OWNER_PASSWORD must be set in .env.staging}@postgres:5432/creditguard
+    command: flask db upgrade
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./apps/api
+    env_file: .env.staging
+    environment:
+      # Restricted runtime role (docs/database-migrations.md) -- created
+      # by the migration the `migrate` service above just ran. Never the
+      # owner role day to day, staging or otherwise.
+      DATABASE_URL: postgresql://creditguard_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env.staging}@postgres:5432/creditguard
+      APP_DATABASE_URL: postgresql://creditguard_app:${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env.staging}@postgres:5432/creditguard
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OIDC_JWKS_URL: http://keycloak:8080/realms/creditguard/protocol/openid-connect/certs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "5100:5000"
+    volumes:
+      # Same local-artefact-store convention as dev (CLAUDE.md: a real
+      # deployment target would use an artefact store, not a bind mount --
+      # this stack is "staging shaped", not a production target itself).
+      - ./model_artifacts:/app/model_artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/v1/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5100/api/v1}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-http://localhost:8181/realms/creditguard}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-creditguard-web}
+        VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-http://localhost:8090/}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    healthcheck:
+      # 127.0.0.1, not localhost: wget resolves "localhost" to the IPv6
+      # loopback (::1) first inside this Alpine image, but nginx.conf only
+      # binds 0.0.0.0 (IPv4) -- that mismatch made this healthcheck fail
+      # with "connection refused" even though nginx was serving requests
+      # correctly (confirmed by curling the container from outside).
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  staging_postgres_data:
+  staging_keycloak_data:
