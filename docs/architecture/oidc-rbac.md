@@ -5,6 +5,12 @@ CHECKLIST.md Phase 6 ("Authentication + RBAC"). Started as one endpoint
 (scoring, decisions, models, fairness, audit, datasets, monitoring,
 tenants), and the React app has a real login flow with every page built.
 
+See `docs/architecture/security-hardening.md` (CHECKLIST.md Phase 7D)
+for the systematic verification pass built on top of this design —
+attack-specific regression tests against the token verification here,
+the full cross-tenant object-level authorization matrix, and everything
+else that pass covered.
+
 ## The identity boundary
 
 ```

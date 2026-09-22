@@ -1,3 +1,3 @@
 # Deliberately separate from apps/api/requirements.txt, tests/smoke/requirements.txt,
 # and tests/resilience/requirements.txt -- see load_test_score.py's module docstring.
-requests==2.32.3
+requests==2.33.0  # PYSEC-2026-1872/2275, CHECKLIST.md Phase 7D pip-audit run

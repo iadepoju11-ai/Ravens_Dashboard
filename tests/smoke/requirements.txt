@@ -2,5 +2,5 @@
 # black-box HTTP client for a *deployed* environment, not part of the
 # Flask app itself -- it has no business sharing that app's dependency
 # tree (SQLAlchemy, gunicorn, the ML runtime libraries, ...).
-requests==2.32.3
+requests==2.33.0  # PYSEC-2026-1872/2275, CHECKLIST.md Phase 7D pip-audit run
 pytest==8.2.2

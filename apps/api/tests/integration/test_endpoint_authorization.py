@@ -53,6 +53,10 @@ _PROTECTED_ROUTES = [
     ("POST", "/api/v1/datasets", "credit_analyst"),
     ("GET", "/api/v1/monitoring/metrics", "credit_analyst"),
     ("GET", "/api/v1/monitoring/alerts", "credit_analyst"),
+    ("GET", "/api/v1/monitoring/observability", "credit_analyst"),
+    ("GET", "/api/v1/reviews", "credit_analyst"),
+    ("GET", "/api/v1/reviews/00000000-0000-0000-0000-000000000000", "credit_analyst"),
+    ("POST", "/api/v1/reviews/00000000-0000-0000-0000-000000000000/resolve", "credit_analyst"),
 ]
 
 # tenant:read is deliberately granted to all five roles (reading your own

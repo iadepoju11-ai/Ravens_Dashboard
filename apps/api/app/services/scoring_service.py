@@ -39,6 +39,16 @@ from app.services.review_service import maybe_open_review_case
 from app.services.runtime_resolver import resolve_runtime
 
 _MAX_FEATURES = 200
+# Matches Decision.application_reference/request_id's own db.String(255)
+# column length (app/models/decision.py). Postgres enforces this at
+# INSERT time regardless (a DataError, caught by the global exception
+# handler as a safe generic 500 -- app/__init__.py), but rejecting an
+# oversized value here first gives a clean, structured 400 instead
+# (CHECKLIST.md Phase 7D: "reject unknown/out-of-range... with structured
+# errors"). SQLite (this project's test/dev database) does not enforce
+# VARCHAR length at all, so this check is the only thing that catches it
+# there.
+_MAX_STRING_FIELD_LENGTH = 255
 logger = logging.getLogger(__name__)
 
 
@@ -90,6 +100,8 @@ class ScoringService:
         model_version_id: str | None = None,
     ) -> ScoringResult:
         request_start = time.perf_counter()
+
+        self._validate_request_id(request_id)
 
         existing = self._find_existing(tenant, request_id)
         if existing is not None:
@@ -273,6 +285,12 @@ class ScoringService:
     def _validate_application_reference(self, value) -> None:
         if not value or not isinstance(value, str):
             raise ScoringValidationError("application_reference is required and must be a string")
+        if len(value) > _MAX_STRING_FIELD_LENGTH:
+            raise ScoringValidationError(f"application_reference must not exceed {_MAX_STRING_FIELD_LENGTH} characters")
+
+    def _validate_request_id(self, value: str) -> None:
+        if len(value) > _MAX_STRING_FIELD_LENGTH:
+            raise ScoringValidationError(f"request_id must not exceed {_MAX_STRING_FIELD_LENGTH} characters")
 
     def _validate_features(self, features) -> None:
         if not isinstance(features, dict) or not features:

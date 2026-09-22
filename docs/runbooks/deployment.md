@@ -410,17 +410,24 @@ duplicate/concurrent requests are handled safely:
   confirms it comes back healthy on its own and that a decision scored
   before the restart is still readable afterward (Postgres, not the API
   process, is the system of record).
-- `test_duplicate_request_safety.py` — fires 10 simultaneous client-side
-  `/score` calls with the same `request_id`; confirms exactly one decision
-  is created and every racing call gets a safe response, never a 500. This
-  is the real-concurrency proof behind a fix made in this same pass:
-  `ScoringService` could previously let two requests both pass its
-  idempotency lookup before either committed, and the loser would 500 on
-  the database's own `uq_decision_tenant_request_id` constraint instead
-  of receiving the winner's decision — `apps/api/app/services/scoring_service.py`
-  now catches that `IntegrityError` and returns the existing decision
-  instead (regression-tested deterministically at the unit level too:
-  `apps/api/tests/unit/test_scoring_service.py::test_a_concurrent_duplicate_request_is_deduplicated_not_crashed`).
+- `test_duplicate_request_safety.py` — fires N simultaneous client-side
+  `/score` calls carrying the *same* idempotency key (`request_id`) at
+  the real API and Postgres, and confirms exactly one decision is created
+  and every racing call gets a safe response, never a 500. **Caveat,
+  discovered while writing it**: this deployment's gunicorn runs a single
+  worker (see "Observability" above and `docs/performance/staging-baseline.md`),
+  so these requests are serialized before they reach `ScoringService` —
+  this test cannot force the genuine race window a fix made in this same
+  pass addresses. That fix — `ScoringService` could previously let two
+  truly concurrent requests both pass its idempotency lookup before
+  either committed, and the loser would 500 on the database's own
+  `uq_decision_tenant_request_id` constraint instead of receiving the
+  winner's decision — is proven deterministically instead, at the unit
+  level: `apps/api/tests/unit/test_scoring_service.py::test_a_concurrent_duplicate_request_is_deduplicated_not_crashed`
+  forces the exact race window directly. The staging test still verifies
+  real, valuable end-to-end coverage (the dedup contract holds under load
+  against the real stack); see the test's own docstring for the full
+  reasoning.
 
 The Postgres/Kafka/API-restart tests are **destructive** — they stop or
 restart real containers in this deployment — so they're marked
@@ -441,6 +448,26 @@ cd tests/resilience && RUN_RESILIENCE_TESTS=1 python -m pytest . -v
 this staging deployment, individually and as a full sequential run, with
 the stack confirmed fully healthy (`docker compose ... ps`, all services
 `Up ... (healthy)`) immediately afterward both times.
+
+## Security (CHECKLIST.md Phase 7D)
+
+Full verification write-up, real findings, and what was and wasn't fixed:
+`docs/architecture/security-hardening.md`. The deploy-relevant knobs it
+adds, both already set correctly in the real `.env.staging`/`.env.example`:
+
+- `CORS_ALLOWED_ORIGINS` — comma-separated list of origins allowed to
+  make cross-origin requests to this API (the React app's own origin).
+  flask-cors only ever echoes back CORS headers for a listed origin,
+  never `*`.
+- `RATELIMIT_DEFAULT` — the app-wide per-remote-address rate limit
+  (`POST /score` has its own stricter, hardcoded override). In-memory
+  storage — see the security doc's "known limitation" on what changes if
+  this is ever scaled past one gunicorn worker.
+
+Also new: `create_app()` refuses to start under `FLASK_ENV=production`
+if `SECRET_KEY` is still the literal placeholder `"change-me"` — a
+fail-fast check that someone actually did the secret-generation step
+above, not a silent insecure default.
 
 ## Known limitations
 

@@ -5,7 +5,7 @@ from flask import Flask, Response, jsonify, request
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import CONFIG_BY_NAME
-from app.extensions import cors, db, jwt, migrate
+from app.extensions import cors, db, limiter, migrate
 from app.observability import context as observability_context
 from app.observability.logging_config import configure_logging
 from app.observability.metrics import (
@@ -23,6 +23,19 @@ def create_app(config_name: str | None = None, database_uri: str | None = None) 
     app.config.from_object(CONFIG_BY_NAME[config_name])
     configure_logging(app)
 
+    # CHECKLIST.md Phase 7D: fail loudly at startup rather than silently
+    # running with a secret nobody actually set. "change-me" is the
+    # documented placeholder in .env.example/.env.staging.example, never a
+    # real value -- if it's still set under FLASK_ENV=production, someone
+    # skipped the setup step in docs/runbooks/deployment.md, and this
+    # should stop the process instead of signing sessions/tokens with a
+    # secret an attacker could just read from this repository.
+    if config_name == "production" and app.config["SECRET_KEY"] == "change-me":
+        raise RuntimeError(
+            "SECRET_KEY is still the default placeholder value under a production config -- "
+            "set a real, generated secret (see .env.staging.example) before starting this app."
+        )
+
     # Flask-SQLAlchemy 3.x builds the engine inside db.init_app() and never
     # re-reads app.config afterwards -- setting SQLALCHEMY_DATABASE_URI post
     # hoc (e.g. in a test fixture) silently binds nothing and the app keeps
@@ -35,8 +48,12 @@ def create_app(config_name: str | None = None, database_uri: str | None = None) 
 
     db.init_app(app)
     migrate.init_app(app, db)
-    jwt.init_app(app)
-    cors.init_app(app)
+    # Only echoes CORS headers back for an Origin in this explicit list
+    # (CHECKLIST.md Phase 7D) -- flask_cors.CORS() with no `origins` given
+    # defaults to allowing every origin, wrong for a platform serving real
+    # tenant credit-decision data to a browser.
+    cors.init_app(app, origins=app.config["CORS_ALLOWED_ORIGINS"])
+    limiter.init_app(app)
 
     from app import models  # noqa: F401  (registers ORM models with SQLAlchemy metadata)
     from app.api.v1 import register_blueprints
@@ -62,6 +79,7 @@ def create_app(config_name: str | None = None, database_uri: str | None = None) 
     # the authenticated, tenant-permission-gated JSON view of this same
     # data, for the frontend.
     @app.get("/metrics")
+    @limiter.exempt  # scraped frequently and legitimately by design -- not abuse.
     def _metrics():
         return Response(generate_latest(METRICS_REGISTRY), mimetype=CONTENT_TYPE_LATEST)
 
@@ -124,6 +142,20 @@ def create_app(config_name: str | None = None, database_uri: str | None = None) 
         HTTP_REQUEST_DURATION_SECONDS.labels(method=request.method, route=route).observe(duration)
 
         response.headers[observability_context.REQUEST_ID_HEADER] = observability_context.get_request_id()
+
+        # Security headers (CHECKLIST.md Phase 7D) -- applied to every
+        # response, not just HTML ones: this API never renders HTML itself,
+        # so a strict, blanket CSP is safe rather than something to tune per
+        # route. HSTS is included even though this stack has no TLS today
+        # (docs/runbooks/deployment.md's "Known limitations") -- browsers
+        # ignore it on a plain-HTTP response per spec, so it's inert until a
+        # real deployment terminates TLS in front of this app, not
+        # misleading in the meantime.
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
 
         app.logger.info(
             "request completed",

@@ -262,3 +262,37 @@ def test_a_concurrent_duplicate_request_is_deduplicated_not_crashed(app):
     assert result.created is False
     assert result.decision.outcome == "approve"  # the concurrent winner's row, not a fresh _FixedRuntime score
     assert Decision.query.filter_by(tenant_id=tenant.id, request_id="race-1").count() == 1
+
+
+def test_an_oversized_application_reference_is_rejected(app):
+    # CHECKLIST.md Phase 7D: matches Decision.application_reference's own
+    # db.String(255) column (app/models/decision.py) -- SQLite (this
+    # test's database) doesn't enforce VARCHAR length at all, so only
+    # this application-level check catches it here; on real Postgres an
+    # unvalidated oversized value would instead surface as an unhandled
+    # DataError (a safe but less clean generic 500).
+    tenant, _model_version = _create_tenant_and_deployed_model()
+
+    with pytest.raises(ScoringValidationError):
+        ScoringService(runtime=_FixedRuntime()).score(
+            tenant=tenant,
+            application_reference="x" * 256,
+            features={"income": 0.5},
+            request_id="oversized-app-ref-1",
+        )
+
+    assert Decision.query.filter_by(tenant_id=tenant.id).count() == 0
+
+
+def test_an_oversized_request_id_is_rejected(app):
+    tenant, _model_version = _create_tenant_and_deployed_model()
+
+    with pytest.raises(ScoringValidationError):
+        ScoringService(runtime=_FixedRuntime()).score(
+            tenant=tenant,
+            application_reference="APP-OVERSIZED-REQUEST-ID",
+            features={"income": 0.5},
+            request_id="y" * 256,
+        )
+
+    assert Decision.query.filter_by(tenant_id=tenant.id).count() == 0

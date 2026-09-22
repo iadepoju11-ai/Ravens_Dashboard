@@ -1,16 +1,36 @@
-"""Concurrency: duplicate-event / duplicate-request safety proven against
-a real deployed stack (CHECKLIST.md Phase 7C) -- fires genuinely
-concurrent /score calls carrying the *same* client-supplied idempotency
-key (`request_id`) at the real staging API and Postgres, the scenario the
-deterministic unit-level reproduction in
-apps/api/app/services/scoring_service.py's
-`test_a_concurrent_duplicate_request_is_deduplicated_not_crashed` can
-only simulate, not genuinely race. That unit test also pins the fix this
-one is proving end-to-end: two overlapping calls can both pass the
-initial idempotency lookup before either commits, so the actual
-arbitration happens at the database's `uq_decision_tenant_request_id`
-constraint -- ScoringService now catches the resulting IntegrityError and
-returns the winner's decision instead of surfacing a 500 to the loser.
+"""Duplicate-request safety, exercised as N simultaneous client-side
+`/score` calls carrying the *same* idempotency key (`request_id`) against
+the real staging API and Postgres (CHECKLIST.md Phase 7C).
+
+**Honest caveat, discovered while writing this test**: this staging
+deployment's `api` container runs gunicorn with no `--workers` flag
+(`apps/api/Dockerfile`), i.e. a single synchronous worker (see
+docs/performance/staging-baseline.md) -- one process handling one
+request at a time. That means these N client-side-simultaneous requests
+are actually serialized by gunicorn itself before they ever reach
+`ScoringService`, so this test cannot force the genuine race window
+(`_find_existing` returning "not found" for two calls before either
+commits) the way real concurrent execution could. Confirmed empirically:
+this test passed even against a build of the API that did *not* yet have
+the `IntegrityError` handling described below, because the race it's
+meant to catch never actually opens under single-worker serialization.
+
+The genuine, deterministic proof of that race and its fix lives in
+`apps/api/tests/unit/test_scoring_service.py::test_a_concurrent_duplicate_request_is_deduplicated_not_crashed`,
+which forces the race directly (no threads, no worker model to fight)
+by making `_find_existing`'s first call report "not found" and then
+committing a colliding row itself, standing in for a concurrent winner.
+`ScoringService` catches the resulting `IntegrityError` on the losing
+insert and returns the winner's decision instead of a 500.
+
+This test still earns its place here: it proves the idempotency/dedup
+contract holds end-to-end against the real deployed stack under N
+simultaneous submissions -- exactly one decision created, every other
+call replayed safely, nothing 500s -- which is real coverage even though
+it cannot exercise the specific race window the unit test targets. If
+this deployment is ever changed to run multiple gunicorn workers (see
+the load-testing doc's capacity-planning notes), this test would then
+also be capable of catching a regression of the fix itself.
 
 Not marked destructive and not gated behind RUN_RESILIENCE_TESTS -- this
 test doesn't touch any container, only ordinary concurrent HTTP traffic

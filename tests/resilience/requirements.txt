@@ -1,5 +1,5 @@
 # Deliberately separate from apps/api/requirements.txt and from
 # tests/smoke/requirements.txt -- see tests/resilience/conftest.py's
 # module docstring for why.
-requests==2.32.3
+requests==2.33.0  # PYSEC-2026-1872/2275, CHECKLIST.md Phase 7D pip-audit run
 pytest==8.2.2

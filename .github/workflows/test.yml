@@ -105,7 +105,6 @@ jobs:
           docker run -d --network host --name creditguard-api \
             -e DATABASE_URL=postgresql://creditguard:creditguard@localhost:5432/creditguard \
             -e SECRET_KEY=ci-only \
-            -e JWT_SECRET_KEY=ci-only \
             creditguard-api
       - name: Wait for health
         run: |

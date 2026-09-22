@@ -1,0 +1,109 @@
+name: security
+
+# CHECKLIST.md Phase 7D: dependency and container vulnerability scanning,
+# separate from test.yml (which gates correctness) so a new CVE
+# disclosure can fail this workflow without blocking on rebuilding
+# containers, and vice versa. Runs on every push/PR to master, plus a
+# weekly schedule so a CVE disclosed against an already-merged,
+# unchanged dependency is still caught promptly.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  # Real python deps, real check: pip-audit against the exact versions
+  # apps/api/requirements.txt pins, matching a real run done while writing
+  # this (found and fixed Flask/Flask-Cors/python-dotenv CVEs with
+  # available fixes -- see requirements.txt's own comments). The one
+  # remaining finding (pytest, PYSEC-2026-1845) is a deliberately
+  # deferred major-version bump documented right there in
+  # requirements.txt -- ignored here by ID, not by silencing the whole
+  # job, so a *new* vulnerability in anything else still fails this.
+  python-dependency-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: apps/api/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pip install pip-audit
+      - name: pip-audit (fails on any new vulnerability with a fix available)
+        run: pip-audit --ignore-vuln PYSEC-2026-1845
+
+  # npm's own dependency graph distinguishes production from dev
+  # dependencies -- --omit=dev audits only what actually ships in
+  # apps/web/Dockerfile's built image (vite/vitest/esbuild are
+  # devDependencies, never bundled into the static output nginx serves).
+  # A real run while writing this found 0 vulnerabilities with --omit=dev
+  # and several (up to critical) without it, all in that dev-only
+  # toolchain -- reported for visibility, but not what fails this job,
+  # since failing a security gate on a package that never ships would
+  # train everyone to ignore it.
+  node-dependency-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - name: npm audit -- production dependencies (fails the build)
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: npm audit -- dev dependencies (report only, never fails the build)
+        if: always()
+        run: npm audit --audit-level=moderate || true
+
+  # Scans the actual images apps/api/Dockerfile and apps/web/Dockerfile
+  # build -- apps/web's multi-stage build means this scans the final
+  # nginx:1.27-alpine stage that's actually served, not the node:20-slim
+  # build stage discarded after `npm run build`. --ignore-unfixed matters:
+  # base-image OS packages routinely carry HIGH/CRITICAL CVEs the
+  # upstream distro hasn't patched yet, which would otherwise fail this
+  # job on noise nothing here can act on; a *fixed* CRITICAL finding is
+  # actionable (bump the base image / rebuild) and does fail it.
+  container-image-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: ./apps/api
+            image: creditguard-api:scan
+          - name: web
+            context: ./apps/web
+            image: creditguard-web:scan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the ${{ matrix.name }} image
+        run: docker build -t ${{ matrix.image }} ${{ matrix.context }}
+      - name: Trivy scan -- fixed CRITICAL vulnerabilities (fails the build)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Trivy scan -- full HIGH/CRITICAL report (never fails the build)
+        if: always()
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: HIGH,CRITICAL
+          exit-code: "0"

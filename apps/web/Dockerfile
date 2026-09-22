@@ -33,6 +33,13 @@ RUN npm run build
 
 FROM nginx:1.27-alpine AS serve
 
+# apk upgrade (CHECKLIST.md Phase 7D) -- a real `trivy` scan of this image
+# found a CRITICAL, fixed OpenSSL CVE (libcrypto3/libssl3) in the base
+# image's own OS packages that `nginx:1.27-alpine` hadn't been rebuilt
+# with yet; upgrading at build time picks up whatever patched packages
+# Alpine's repos already have.
+RUN apk update && apk upgrade --no-cache
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 

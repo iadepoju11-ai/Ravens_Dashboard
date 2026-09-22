@@ -3,6 +3,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
+from app.extensions import limiter
 from app.infrastructure.security.tenant_context import TenantResolutionError, resolve_tenant_by_id
 from app.models.decision import DECISION_OUTCOMES, Decision
 from app.models.explanation import Explanation
@@ -34,6 +35,11 @@ def _explanation_dict(explanation: Explanation | None) -> dict | None:
 
 
 @bp.post("/score")
+# Stricter than the app-wide default (app/config.py's RATELIMIT_DEFAULT) --
+# this is the most expensive request in the system (model inference,
+# explanation generation, an audit write, three outbox writes) and the
+# one most worth bounding per caller (CHECKLIST.md Phase 7D).
+@limiter.limit("30 per minute")
 def score_application():
     identity = authenticate()
     require_permission(identity, "decisions:create")
