@@ -469,6 +469,101 @@ if `SECRET_KEY` is still the literal placeholder `"change-me"` — a
 fail-fast check that someone actually did the secret-generation step
 above, not a silent insecure default.
 
+## CI/CD (CHECKLIST.md Phase 7E)
+
+Three workflows, deliberately separated by how fast they need to be and
+what they gate — every command below was run for real against this
+repository while writing this, not assumed correct from reading the
+YAML.
+
+- **`.github/workflows/pr-checks.yml`** — every push to a PR branch.
+  Ruff, the SQLite-backed backend unit/integration suite, frontend
+  lint/typecheck/test/build, and the ML workers' lint+test. No Docker
+  builds, no Postgres/Kafka services. Target: a few minutes, so a PR
+  gets feedback quickly.
+- **`.github/workflows/main-checks.yml`** — every push to `master` (i.e.
+  once a PR merges) and manual dispatch. Everything pr-checks.yml runs,
+  self-contained (a push event doesn't inherit a PR's own job results),
+  plus:
+  - Real Postgres, full backend suite — including
+    `tests/integration/test_db_permissions.py` (the restricted
+    `creditguard_app` role's append-only audit permissions), which
+    **never actually ran in CI before this pass** — the old `test.yml`
+    never set `APP_DATABASE_URL`, so it silently skipped every time.
+    Confirmed for real: ran the exact same env vars this job uses
+    against a fresh Postgres, and those 6 tests genuinely execute and
+    pass now, not skip.
+  - An isolated migration upgrade → downgrade → upgrade regression
+    (`tests/test_migrations.py`, its own dedicated Postgres service —
+    never api-postgres-tests's database, for the same reason
+    `docker-compose.yml`'s separate `postgres-migrations-test` service
+    exists for local dev: a downgrade-to-base would otherwise wipe
+    state other tests in the same job depend on).
+  - A real Kafka integration test
+    (`tests/integration/test_kafka_integration.py`, new this pass) —
+    until now nothing in the suite ever called
+    `app/services/outbox_service.py::publish_pending_events()` against
+    an actual broker, only a fake `KafkaProducerLike`. This test
+    publishes a real message and reads it back off the real topic with
+    a real `KafkaConsumer` to prove the wire envelope round-trips, not
+    just that a DB row changed status. (Zookeeper mode, matching every
+    other Kafka instance in this repo — the broker's
+    `KAFKA_ADVERTISED_LISTENERS` is set to `localhost`, not the `kafka`
+    service hostname `docker-compose.yml`/`docker-compose.staging.yml`
+    use internally, because this job's steps run directly on the
+    runner, not inside a container, and need an address the runner
+    itself can resolve.)
+  - Clean, independent Docker builds for both images, each smoke-tested
+    (api: real migrations + `/health` + `/health/ready` against a real
+    Postgres; web: the container starts and its `/healthz` responds).
+  - **Reproducible image artifacts tagged by Git SHA**: once every
+    check above passes, both images are rebuilt and pushed to GHCR
+    (`ghcr.io/<repo>/api` and `.../web`) as `:<commit-sha>` and
+    `:latest` — no external registry account needed, just the
+    workflow's own `GITHUB_TOKEN` with package-write permission.
+  - **The staging release gate**: spins up the real
+    `docker-compose.staging.yml` stack on the runner itself (generating
+    ephemeral CI-only secrets the same shape as this doc's "First-time
+    setup" section), seeds it, and requires **both** the smoke suite
+    and the resilience suite — including the destructive fault-injection
+    tests, safe here since this is a throwaway runner — to pass. This
+    is the actual definition of "valid staging release" for this
+    project: not "the unit tests passed," but "a freshly deployed
+    staging stack survives the same smoke and fault-injection tests a
+    human would run by hand." Verified for real while writing this: tore
+    down the running local staging stack, redeployed it with a
+    freshly-generated `.env.staging` exactly as this job generates one,
+    and confirmed all 27 smoke tests and all 4 resilience tests
+    (including the destructive ones) pass against it.
+- **`.github/workflows/security.yml`** — dependency, container, and
+  secret scanning (see "Security" above for the dependency/container
+  detail). Runs on every PR *and* every push to master *and* a weekly
+  schedule, so a CVE disclosed against an already-merged, unchanged
+  dependency is still caught. New this pass: `secret-scan` (gitleaks
+  against the full git history, not just the working tree — a secret
+  committed and later removed would still be caught).  Verified clean
+  against this repository's real history before wiring it in.
+
+**Production-impacting vulnerabilities are blocking; the two
+already-documented dev-only exceptions stay explicit, not silenced**:
+`pip-audit --ignore-vuln PYSEC-2026-1845` excludes only the pytest
+advisory by ID (any *other* new Python CVE still fails the job); `npm
+audit --omit=dev` is what actually gates the build (0 vulnerabilities in
+production dependencies, confirmed for real), with a second,
+always-green step separately reporting the full dev-dependency audit
+(vite/vitest/esbuild) for visibility without failing on a package that
+never ships.
+
+**main-checks.yml and security.yml are independent workflow files by
+design** (different job graphs, and security.yml additionally needs its
+own weekly-schedule trigger) — both must be green on a commit for it to
+be considered releasable. Enforcing that is a repository *setting*
+(branch protection → required status checks), not something this repo's
+own YAML can do to itself; add both workflows' job names as required
+checks on `master` if that enforcement matters to you. This document
+doesn't configure that setting — it's a repo-admin action outside what a
+commit to this repository can do.
+
 ## Known limitations
 
 - **No TLS anywhere.** Keycloak runs in `start-dev` mode

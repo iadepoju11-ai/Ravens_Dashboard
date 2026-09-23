@@ -16,6 +16,27 @@ on:
     - cron: "0 6 * * 1"
 
 jobs:
+  # Scans the actual git history (every commit, not just the current
+  # tree) for accidentally committed secrets -- CHECKLIST.md Phase 7E.
+  # fetch-depth: 0 is required: actions/checkout's default shallow clone
+  # (depth 1) would only let gitleaks see the current commit, silently
+  # missing a secret committed and later removed. Verified locally
+  # against this repo's real history before wiring this in ("31 commits
+  # scanned... no leaks found") -- confirmed via --no-git mode first that
+  # a naive whole-directory scan would false-positive heavily on
+  # .venv/node_modules entropy, which is exactly why this scans git
+  # history (tracked content only), not the working directory.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (fails on any detected secret)
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source=/repo --redact --exit-code 1
+
   # Real python deps, real check: pip-audit against the exact versions
   # apps/api/requirements.txt pins, matching a real run done while writing
   # this (found and fixed Flask/Flask-Cors/python-dotenv CVEs with
