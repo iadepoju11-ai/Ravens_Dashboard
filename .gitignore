@@ -47,6 +47,10 @@ data/synthetic/*
 model_artifacts/*
 !model_artifacts/.gitkeep
 
+# Postgres backup dumps (CHECKLIST.md Phase 7F) -- can contain real
+# tenant/decision data, never committed. See docs/backup-restore.md.
+backups/
+
 # Terraform
 infra/terraform/.terraform/
 infra/terraform/*.tfstate

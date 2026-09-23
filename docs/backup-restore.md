@@ -9,9 +9,12 @@ it's repeatable, not a one-off terminal session.
 
 **What this is**: a manual drill proving `pg_dump`/`pg_restore` round-trip
 this schema correctly, including the timestamp precision the audit hash
-chain depends on. **What this is not**: an automated backup schedule,
-retention policy, or disaster-recovery runbook — see "Not yet built"
-below.
+chain depends on. **What this is not**: an automated backup schedule or
+a disaster-recovery runbook — see "Not yet built" below and
+`docs/runbooks/disaster-recovery.md` (CHECKLIST.md Phase 7F), which
+takes this same drill to the staging deployment (scripted, retention-
+pruned backups, a real automated backup→destroy→restore→verify test,
+RPO/RTO targets, and application/migration rollback drills).
 
 ## Taking a backup
 
@@ -65,16 +68,22 @@ but the same category of risk).
 
 ## Not yet built
 
-- **No automated/scheduled backups.** This is a manual drill; nothing
-  runs `pg_dump` on a schedule or ships the result anywhere.
-- **No retention policy.** How many backups to keep, for how long, and
-  where (encrypted at rest, off-host) isn't decided.
-- **No disaster-recovery runbook** — RTO/RPO targets, who's on call, how
-  a restore-into-production would actually be authorized and executed.
-- **Not tested against a production-scale database** — this drill used a
-  handful of rows; restore time and behavior at real data volumes is
-  unverified.
+- **No automated/scheduled backups.** `scripts/staging-backup.sh`
+  (Phase 7F) is still manually triggered — nothing runs it on a
+  schedule. See `docs/runbooks/disaster-recovery.md`'s RPO target for
+  what a scheduler would achieve.
+- **Retention exists at the staging level, not here.** Phase 7F's
+  `scripts/staging-backup.sh` prunes to the N most recent backups
+  (host-local only — no off-host/encrypted-at-rest copy; see that
+  runbook's "Known limitations").
+- **A disaster-recovery runbook now exists**: `docs/runbooks/disaster-recovery.md`
+  — RTO/RPO targets, a real automated backup/restore drill, application
+  and migration rollback drills. Who's on call and how a
+  restore-into-production is authorized remain organizational decisions
+  it deliberately doesn't make.
+- **Not tested against a production-scale database** — this drill (and
+  Phase 7F's staging-level equivalent) used a handful of rows; restore
+  time and behavior at real data volumes is unverified.
 
-These are real operational gaps, tracked in `CHECKLIST.md` Phase 7
-(production engineering & pilot), not silently assumed solved by this
-one successful drill.
+These are real operational gaps, tracked in `CHECKLIST.md`, not silently
+assumed solved by one successful drill.

@@ -223,6 +223,12 @@ Two independent things can need rolling back: the application code, and
 the database schema. Handle them separately — don't downgrade the schema
 just because a code deploy needs reverting, or vice versa.
 
+See `docs/runbooks/disaster-recovery.md` (CHECKLIST.md Phase 7F) for
+real, drilled evidence behind both procedures below: a live application-
+rollback test (an older release against the current schema), and the
+operational lesson from the real oidc_subject migration-rollback
+incident referenced further down this section.
+
 ### Application rollback
 
 There is no image registry or version tagging in this project yet (see

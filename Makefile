@@ -1,4 +1,4 @@
-.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint staging-up staging-down staging-seed staging-logs staging-ps staging-smoke-test staging-redeploy staging-load-test staging-resilience-test
+.PHONY: up down api-install api-run api-test api-test-migrations api-db-upgrade web-install web-run web-test ml-build ml-test ml-train ml-german-credit lint staging-up staging-down staging-seed staging-logs staging-ps staging-smoke-test staging-redeploy staging-load-test staging-resilience-test staging-backup staging-restore staging-dr-drill
 
 up:
 	docker compose up --build
@@ -55,6 +55,22 @@ staging-load-test:
 # tests/resilience/conftest.py and docs/runbooks/deployment.md.
 staging-resilience-test:
 	cd tests/resilience && RUN_RESILIENCE_TESTS=1 python -m pytest . -v
+
+# CHECKLIST.md Phase 7F. See docs/runbooks/disaster-recovery.md.
+staging-backup:
+	bash scripts/staging-backup.sh
+
+# Usage: make staging-restore FILE=backups/staging/creditguard-staging-<timestamp>.dump
+staging-restore:
+	bash scripts/staging-restore.sh $(FILE)
+
+# The real backup -> destroy -> restore -> verify drill, requires
+# RUN_RESILIENCE_TESTS=1 the same as the other destructive resilience
+# tests (this one is the most destructive of all of them -- it drops the
+# staging database). Always restores staging to a known-good seeded
+# state afterward, pass or fail.
+staging-dr-drill:
+	cd tests/resilience && RUN_RESILIENCE_TESTS=1 python -m pytest test_backup_restore_drill.py -v -s
 
 api-install:
 	cd apps/api && pip install -r requirements.txt
