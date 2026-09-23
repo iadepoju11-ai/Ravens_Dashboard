@@ -1,0 +1,1471 @@
+openapi: 3.0.3
+info:
+  title: CreditGuard XAI API
+  version: "1.0.0"
+  description: |
+    Credit-decision governance and explainability API. Returns a credit
+    decision **together with** its explanation, model version, governance
+    checks, and tamper-evident audit evidence (CLAUDE.md: "governance
+    information travels with the credit decision").
+
+    **This document describes the API exactly as implemented**, verified
+    against the real route/model source on 2026-09-23 — not an aspirational
+    or planned future contract. Two things worth knowing before reading
+    further, because they differ from what a generic Flask-API convention
+    might lead you to expect:
+
+    - **Error bodies are always the flat shape `{"error": "<string>"}`.**
+      There is no `error.code` / `error.message` / `error.details` nesting.
+    - **`meta` is not on every response.** It appears in exactly two places:
+      the generic `500` handler (`meta.request_id` only), and
+      `GET /audit/export`'s success body (a differently-shaped `meta` with
+      export provenance — no `request_id` in it). Every other response,
+      success or error, has no `meta` key at all. A request's correlation
+      ID is instead delivered on every response as the `X-Request-Id`
+      **header**, not a body field.
+
+    This is not a compliance claim. Positioning per CLAUDE.md: *"AI credit
+    decision governance and explainability platform"* — not a blanket
+    EU AI Act / GDPR compliance claim merely because SHAP, Fairlearn, or an
+    audit log are present.
+  contact:
+    name: CreditGuard XAI
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:5000/api/v1
+    description: Local development (docker-compose.yml)
+  - url: http://localhost:5100/api/v1
+    description: Staging (docker-compose.staging.yml)
+
+tags:
+  - name: Health
+    description: Unauthenticated liveness/readiness checks. Exempt from rate limiting.
+  - name: Auth
+    description: Placeholder routes only — real authentication is OIDC bearer tokens issued by the external identity provider (Keycloak locally), not these endpoints.
+  - name: Scoring
+    description: The core credit-decision workflow — score, then retrieve.
+  - name: Decisions
+    description: Retrieving previously-scored decisions.
+  - name: Models
+    description: Model version lifecycle — register, approve, deploy.
+  - name: Datasets
+    description: Training dataset version registration.
+  - name: Fairness
+    description: Recording and reading fairness evaluation results.
+  - name: Audit
+    description: Tamper-evident audit chain — read, verify, export.
+  - name: Monitoring
+    description: Tenant-scoped business metrics, alerts, and process-level observability.
+  - name: Reviews
+    description: Human-review workflow for referred decisions and governance failures.
+  - name: Tenants
+    description: The caller's own tenant record. No role is a cross-tenant platform administrator.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: Liveness check
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                required: [status]
+
+  /health/ready:
+    get:
+      operationId: getHealthReady
+      tags: [Health]
+      summary: Readiness check (confirms real database connectivity)
+      security: []
+      responses:
+        "200":
+          description: Ready — the database is reachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessStatus" }
+        "503":
+          description: Not ready — the database is unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadinessStatus" }
+
+  /auth/login:
+    post:
+      operationId: postAuthLogin
+      tags: [Auth]
+      summary: "Not implemented — placeholder"
+      description: |
+        Always returns `501`. Real authentication is an external OIDC
+        Authorization Code + PKCE flow against the identity provider
+        (Keycloak locally); this application never issues its own session
+        or handles a login form. This route is a real, mounted, reachable
+        endpoint (not a 404) — documented here because it is live, not
+        because it does anything.
+      security: []
+      responses:
+        "501":
+          description: Not implemented.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example: { error: "not_implemented" }
+
+  /auth/refresh:
+    post:
+      operationId: postAuthRefresh
+      tags: [Auth]
+      summary: "Not implemented — placeholder"
+      description: Always returns `501`. See `/auth/login`.
+      security: []
+      responses:
+        "501":
+          description: Not implemented.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example: { error: "not_implemented" }
+
+  /score:
+    post:
+      operationId: postScore
+      tags: [Scoring]
+      summary: Score a credit application
+      description: |
+        Validates, resolves the model version, runs inference and
+        explanation, persists the decision, records an audit event, and
+        enqueues outbox events — all in one request. The most expensive
+        request in the system; rate-limited more strictly than the app-wide
+        default.
+
+        **Idempotency**: pass `request_id` to make retries safe. Replaying
+        the same `(tenant, request_id)` returns the original decision with
+        `200` instead of creating a new one (`201`). Two genuinely
+        concurrent calls with the same `request_id` are still guaranteed to
+        produce exactly one decision — the loser of the race replays the
+        winner's result rather than erroring.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "decisions:create"
+      x-rate-limit: "30 per minute (overrides the 300/minute app-wide default)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScoreRequest" }
+            examples:
+              minimal:
+                value:
+                  application_reference: "APP-1001"
+                  features: { income: 0.62, debt_ratio: 0.18 }
+              withIdempotencyKey:
+                value:
+                  application_reference: "APP-1001"
+                  features: { income: 0.62, debt_ratio: 0.18 }
+                  request_id: "3f1b1c1e-1a1a-4c1c-9c1c-1a1a1a1a1a1a"
+      responses:
+        "201":
+          description: A new decision was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScoreResponse" }
+        "200":
+          description: Idempotent replay — the same `request_id` was already scored; the original decision is returned unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScoreResponse" }
+        "400":
+          description: |
+            Validation failure. `error` is one of (verbatim, not paraphrased):
+            `"application_reference is required and must be a string"`,
+            `"application_reference must not exceed 255 characters"`,
+            `"request_id must not exceed 255 characters"`,
+            `"features is required and must be a non-empty object"`,
+            `"features must not exceed 200 entries"`,
+            `"feature names must be non-empty strings"`,
+            `"feature '<name>' has an unsupported value type"`,
+            `"Unknown feature(s) for this model version: [...]"`, or
+            `"feature '<name>' must be numeric for this model version"`
+            (the last two only when the resolved model version recorded a
+            feature schema).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Unknown or inactive tenant, or an explicitly-supplied `model_version_id` doesn't resolve for this tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: '`"Requested model version is not deployed"` or `"No deployed model available for this tenant"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500":
+          description: '`{"error": "Unable to score this application"}` — the model runtime itself failed. Never leaks the underlying exception.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /decisions:
+    get:
+      operationId: getDecisions
+      tags: [Decisions]
+      summary: List decisions
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "decisions:read"
+      parameters:
+        - { name: outcome, in: query, schema: { $ref: "#/components/schemas/DecisionOutcome" } }
+        - { name: model_version_id, in: query, schema: { type: string, format: uuid } }
+        - { name: date_from, in: query, schema: { type: string, format: date-time }, description: ISO-8601 }
+        - { name: date_to, in: query, schema: { type: string, format: date-time }, description: ISO-8601 }
+        - { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 }, description: "Clamped server-side to [1, 100]." }
+      responses:
+        "200":
+          description: Decisions newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decisions: { type: array, items: { $ref: "#/components/schemas/Decision" } }
+                required: [decisions]
+        "400":
+          description: Invalid `outcome`, `date_from`, `date_to`, or `limit`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /decisions/{decisionId}:
+    get:
+      operationId: getDecisionsByDecisionId
+      tags: [Decisions]
+      summary: Get one decision and its explanation
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "decisions:read"
+      parameters:
+        - { $ref: "#/components/parameters/DecisionId" }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScoreResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /models:
+    get:
+      operationId: getModels
+      tags: [Models]
+      summary: List models and their versions
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "models:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models: { type: array, items: { $ref: "#/components/schemas/ModelWithVersions" } }
+                required: [models]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: postModels
+      tags: [Models]
+      summary: Register a model version
+      description: |
+        Creates the parent logical `Model` (identified by tenant + name) on
+        first use. New versions always start `status: draft` — approval and
+        deployment are separate, deliberate steps. Never lets a client put a
+        version live directly.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "models:create"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterModelRequest" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model: { $ref: "#/components/schemas/Model" }
+                  model_version: { $ref: "#/components/schemas/ModelVersion" }
+                required: [model, model_version]
+        "400":
+          description: '`"name, version, and artifact_uri are required"'' or `"metrics must be an object if provided"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: '`"Unknown training_dataset_version_id for this tenant"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: '`"This model version is already registered"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/{modelVersionId}/approve:
+    post:
+      operationId: postModelsByModelVersionIdApprove
+      tags: [Models]
+      summary: Approve a draft model version
+      description: '`modelVersionId` names a **ModelVersion** id, not a Model id — the URL segment is literally `model_id` in the route to match the ERD''s fixed route shape.'
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "models:approve"
+      parameters:
+        - { $ref: "#/components/parameters/ModelVersionIdPathParam" }
+      responses:
+        "200":
+          description: Approved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { model_version: { $ref: "#/components/schemas/ModelVersion" } }
+                required: [model_version]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: '`"Only draft model versions can be approved"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /models/{modelVersionId}/deploy:
+    post:
+      operationId: postModelsByModelVersionIdDeploy
+      tags: [Models]
+      summary: Deploy an approved model version
+      description: |
+        Marks any previously-deployed version for this model `archived` and
+        its active `ModelDeployment` `rolled_back`, then creates a new
+        active `ModelDeployment` for this version.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "models:deploy"
+      parameters:
+        - { $ref: "#/components/parameters/ModelVersionIdPathParam" }
+      responses:
+        "200":
+          description: Deployed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_version: { $ref: "#/components/schemas/ModelVersion" }
+                  deployment: { $ref: "#/components/schemas/ModelDeployment" }
+                required: [model_version, deployment]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: '`"Only approved model versions can be deployed"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /datasets:
+    get:
+      operationId: getDatasets
+      tags: [Datasets]
+      summary: List datasets and their versions
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "datasets:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  datasets: { type: array, items: { $ref: "#/components/schemas/DatasetWithVersions" } }
+                required: [datasets]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: postDatasets
+      tags: [Datasets]
+      summary: Register a dataset version
+      description: Creates the parent logical `Dataset` (tenant + name) on first use.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "datasets:create"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterDatasetRequest" }
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dataset: { $ref: "#/components/schemas/Dataset" }
+                  version: { $ref: "#/components/schemas/DatasetVersion" }
+                required: [dataset, version]
+        "400":
+          description: '`"name, version, and uri are required"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: '`"This dataset version is already registered"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /fairness/reports:
+    get:
+      operationId: getFairnessReports
+      tags: [Fairness]
+      summary: List fairness evaluations
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "fairness:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports: { type: array, items: { $ref: "#/components/schemas/FairnessEvaluation" } }
+                required: [reports]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /fairness/reports/{reportId}:
+    get:
+      operationId: getFairnessReportsByReportId
+      tags: [Fairness]
+      summary: Get one fairness evaluation
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "fairness:read"
+      parameters:
+        - { name: reportId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { report: { $ref: "#/components/schemas/FairnessEvaluation" } }
+                required: [report]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /fairness/evaluate:
+    post:
+      operationId: postFairnessEvaluate
+      tags: [Fairness]
+      summary: Record fairness evaluation results
+      description: |
+        Persists metrics computed offline by the ML pipeline against a
+        specific model version. A metric whose `metric_value` is `null`
+        (too few group members to compute — "not applicable") is reported
+        back in `skipped_not_applicable` but never persisted, since there
+        is nothing to compare against a threshold. A persisted metric with
+        `passed: false` also raises a `MonitoringAlert`
+        (`fairness_threshold_breach`, severity `high`).
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "fairness:review"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordFairnessRequest" }
+      responses:
+        "201":
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports: { type: array, items: { $ref: "#/components/schemas/FairnessEvaluation" } }
+                  skipped_not_applicable: { type: array, items: { type: string }, description: "metric_name values that were reported but not persisted." }
+                required: [reports, skipped_not_applicable]
+        "400":
+          description: '`"model_version_id and a non-empty metrics list are required"'' or `"Each metric requires: protected_attribute, metric_name, metric_value, threshold, passed"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: '`"Unknown model_version_id for this tenant"`.'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /audit/events:
+    get:
+      operationId: getAuditEvents
+      tags: [Audit]
+      summary: List audit events
+      description: Does **not** include each event's `payload` — see `GET /audit/export` for the payload-included form.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "audit:read"
+      responses:
+        "200":
+          description: Events oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
+                required: [events]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/events/{eventId}/verify:
+    get:
+      operationId: getAuditEventsByEventIdVerify
+      tags: [Audit]
+      summary: Verify one event's own hash
+      description: |
+        Checks only this one event's hash against its own recorded fields —
+        does **not** detect a deleted or forked event elsewhere in the
+        chain (use `/audit/verify-chain` for that). Writes a new
+        `AuditIntegrityCheck` row as a side effect of calling this.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "audit:verify"
+      parameters:
+        - { name: eventId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK — flat top-level keys, not nested under an `event`/`report` key.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string, format: uuid }
+                  valid: { type: boolean }
+                  integrity_check_id: { type: string, format: uuid }
+                required: [event_id, valid, integrity_check_id]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /audit/integrity-status:
+    get:
+      operationId: getAuditIntegritystatus
+      tags: [Audit]
+      summary: Most recently recorded integrity check (no fresh verification triggered)
+      description: For dashboard consumption — reports what the last check found, which may be stale. Trigger a fresh check via `/audit/verify-chain` or the periodic `flask audit verify-all-tenants` command.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "audit:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  latest_check:
+                    type: object
+                    nullable: true
+                    allOf:
+                      - { $ref: "#/components/schemas/AuditIntegrityCheck" }
+                required: [latest_check]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/verify-chain:
+    get:
+      operationId: getAuditVerifychain
+      tags: [Audit]
+      summary: Verify the tenant's entire audit chain
+      description: Detects tamper, deletion, reordering (via timestamp tampering), and forks. Writes a new `AuditIntegrityCheck` row as a side effect.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "audit:verify"
+      responses:
+        "200":
+          description: OK — flat top-level keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyChainResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/export:
+    get:
+      operationId: getAuditExport
+      tags: [Audit]
+      summary: Export audit events (with payload), optionally date-scoped
+      description: |
+        The one place `payload` is included per event. Writes a new
+        `audit.export` `AuditEvent` as a side effect (recorded *after* the
+        export query runs, so it never includes itself) — "who exported
+        what, when" is itself real, chained audit evidence, not a separate
+        access log that could be edited independently. Personal data is
+        minimised by construction: recorded payloads never carry raw
+        applicant features to begin with, only derived values like
+        score/outcome/model_version_id.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "audit:export"
+      parameters:
+        - { name: date_from, in: query, schema: { type: string, format: date-time } }
+        - { name: date_to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditExportResponse" }
+        "400":
+          description: Invalid `date_from`/`date_to`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /monitoring/metrics:
+    get:
+      operationId: getMonitoringMetrics
+      tags: [Monitoring]
+      summary: Tenant-scoped business metrics
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "monitoring:read"
+      responses:
+        "200":
+          description: |
+            `approval_rate` is explicitly `null` (never `0`) when there are
+            no decisions yet — a 0% approval rate and "we don't know yet"
+            are different facts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { metrics: { $ref: "#/components/schemas/BusinessMetrics" } }
+                required: [metrics]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /monitoring/alerts:
+    get:
+      operationId: getMonitoringAlerts
+      tags: [Monitoring]
+      summary: List monitoring alerts
+      description: Real writers — audit-chain verification failures, outbox publish failures, and fairness threshold breaches.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "monitoring:read"
+      responses:
+        "200":
+          description: Alerts newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alerts: { type: array, items: { $ref: "#/components/schemas/MonitoringAlert" } }
+                required: [alerts]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /monitoring/observability:
+    get:
+      operationId: getMonitoringObservability
+      tags: [Monitoring]
+      summary: Process-level operational metrics (HTTP, scoring, DB, outbox, governance)
+      description: |
+        Deliberately **not tenant-scoped**, unlike every other endpoint in
+        this API — these are in-process Prometheus counters for the whole
+        running container, the same numbers `GET /metrics` (outside
+        `/api/v1`, unauthenticated, Prometheus text format) exposes for a
+        real scrape. This is the authenticated, curated JSON view of the
+        identical underlying data, for the frontend Monitoring page.
+        p50/p95 are approximated from Prometheus histogram buckets by
+        linear interpolation (the same technique Prometheus's own
+        `histogram_quantile()` uses).
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "monitoring:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { observability: { $ref: "#/components/schemas/ObservabilitySummary" } }
+                required: [observability]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /reviews:
+    get:
+      operationId: getReviews
+      tags: [Reviews]
+      summary: List review cases
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "review:read"
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ReviewStatus" } }
+      responses:
+        "200":
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reviews: { type: array, items: { $ref: "#/components/schemas/ReviewCaseWithDecision" } }
+                required: [reviews]
+        "400":
+          description: Invalid `status`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /reviews/{reviewId}:
+    get:
+      operationId: getReviewsByReviewId
+      tags: [Reviews]
+      summary: Get one review case, with its decision context
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "review:read"
+      parameters:
+        - { $ref: "#/components/parameters/ReviewIdPathParam" }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { review: { $ref: "#/components/schemas/ReviewCaseWithDecision" } }
+                required: [review]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /reviews/{reviewId}/resolve:
+    post:
+      operationId: postReviewsByReviewIdResolve
+      tags: [Reviews]
+      summary: Claim or close a review case
+      description: |
+        A real, ordered workflow: `open → in_review` (claims it, records
+        the caller as `assigned_to`), or `open → closed` / `in_review →
+        closed` (resolves it; `assigned_to` is set from the caller only if
+        nobody had claimed it yet). Any other transition — including
+        re-opening a closed case — is rejected with `409`, not silently
+        applied.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "review:resolve"
+      parameters:
+        - { $ref: "#/components/parameters/ReviewIdPathParam" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [in_review, closed] }
+              required: [status]
+      responses:
+        "200":
+          description: Resolved — flat shape, no nested decision (unlike the GET endpoints).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { review: { $ref: "#/components/schemas/ReviewCase" } }
+                required: [review]
+        "400":
+          description: "`\"status must be 'in_review' or 'closed'\"`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`\"Cannot move a '<current>' review case to '<new>'\"`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /tenants:
+    get:
+      operationId: getTenants
+      tags: [Tenants]
+      summary: Get the caller's own tenant
+      description: Always returns a **single-element array** containing only the caller's own tenant — no role in this application is a cross-tenant platform administrator, so this is never a real multi-tenant listing despite the plural name.
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "tenant:read"
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants: { type: array, minItems: 1, maxItems: 1, items: { $ref: "#/components/schemas/Tenant" } }
+                required: [tenants]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /tenants/{tenantId}:
+    get:
+      operationId: getTenantsByTenantId
+      tags: [Tenants]
+      summary: Get a tenant by id
+      description: '`404` unless `tenantId` equals the caller''s own tenant — never leaks another tenant''s existence.'
+      security: [{ bearerAuth: [] }]
+      x-required-permission: "tenant:read"
+      parameters:
+        - { name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { tenant: { $ref: "#/components/schemas/Tenant" } }
+                required: [tenant]
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        An OIDC access token issued by the external identity provider
+        (Keycloak locally, any OIDC-compliant IdP in production) —
+        Authorization Code + PKCE from the React frontend. Verified against
+        the issuer's published JWKS: signature (RS256 only — the allowlist
+        is fixed server-side, not inferred from the token's own header, so
+        neither an `alg: none` nor an RS256-to-HS256 confusion forgery is
+        accepted), issuer, audience, and expiry. A token's `tenant_id`
+        claim only matters the first time a given subject is seen — every
+        later request uses the tenant already stored against that user,
+        never re-read from the token, so a stale or altered claim can't
+        move a user between tenants after the fact.
+
+  parameters:
+    DecisionId:
+      name: decisionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ModelVersionIdPathParam:
+      name: modelVersionId
+      in: path
+      required: true
+      description: Despite the URL segment name (fixed by the ERD's route shape), this is a **ModelVersion** id, not a Model id.
+      schema: { type: string, format: uuid }
+    ReviewIdPathParam:
+      name: reviewId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid/expired bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { error: "Invalid or missing authentication token" }
+    Forbidden:
+      description: Authenticated, but lacking the required permission.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { error: "You do not have permission to perform this action" }
+    NotFound:
+      description: '`{"error": "not_found"}` — used uniformly for "doesn''t exist" and "belongs to another tenant" alike, so a cross-tenant probe can never distinguish the two.'
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example: { error: "not_found" }
+    PayloadTooLarge:
+      description: Request body exceeded `MAX_CONTENT_LENGTH` (1 MB default).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    RateLimited:
+      description: Rate limit exceeded (per remote address; `POST /score` is limited to 30/minute).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    InternalError:
+      description: |
+        Genuinely unhandled exception. Can occur on any endpoint, not
+        modeled on every operation individually to avoid repeating this on
+        all 27 of them — this is the one representative reference. Never
+        leaks the real exception message, type, or a traceback; the full
+        detail is logged server-side only.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/InternalErrorResponse" }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: The shape of every error response in this API except the generic 500 handler (see `InternalErrorResponse`). Never nested.
+      properties:
+        error: { type: string }
+      required: [error]
+
+    InternalErrorResponse:
+      description: 'The **only** place a `meta` key appears on an error response. Never leaks the real exception message, type, or a traceback.'
+      type: object
+      properties:
+        error: { type: string, example: "An unexpected error occurred" }
+        meta:
+          type: object
+          properties:
+            request_id: { type: string }
+          required: [request_id]
+      required: [error, meta]
+
+    ReadinessStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        dependencies:
+          type: object
+          properties: { database: { type: boolean } }
+          required: [database]
+      required: [status, dependencies]
+
+    DecisionOutcome:
+      type: string
+      enum: [approve, refer, decline]
+
+    ReviewStatus:
+      type: string
+      enum: [open, in_review, closed]
+
+    ScoreRequest:
+      type: object
+      properties:
+        application_reference:
+          type: string
+          maxLength: 255
+          description: Required. The lender's own reference for this application.
+        features:
+          type: object
+          description: Required, non-empty, at most 200 entries. Values must be number, string, boolean, or null. If the resolved model version recorded a feature schema, unknown feature names and wrong types for numeric fields are rejected.
+          additionalProperties:
+            oneOf:
+              - { type: number, nullable: true }
+              - { type: string, nullable: true }
+              - { type: boolean, nullable: true }
+        model_version_id:
+          type: string
+          format: uuid
+          description: Optional. If omitted, resolves to the tenant's most-recently-deployed model version. A client can never select an unapproved/undeployed version.
+        request_id:
+          type: string
+          maxLength: 255
+          description: Optional idempotency key. A fresh one is generated server-side if omitted, so an omitted key can never accidentally collide with a replay.
+      required: [application_reference, features]
+
+    Decision:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        model_version_id: { type: string, format: uuid }
+        application_reference: { type: string }
+        request_id: { type: string }
+        score: { type: number, format: float }
+        outcome: { $ref: "#/components/schemas/DecisionOutcome" }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, model_version_id, application_reference, request_id, score, outcome, created_at]
+
+    ReasonCode:
+      type: object
+      properties:
+        rank: { type: integer }
+        feature: { type: string }
+        label: { type: string }
+        contribution: { type: number, format: float }
+        direction: { type: string, enum: [increased_risk, decreased_risk, no_effect] }
+      required: [rank, feature, label, contribution, direction]
+
+    Explanation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        decision_id: { type: string, format: uuid }
+        method: { type: string, description: 'e.g. "placeholder", "shap-tree".' }
+        base_value: { type: number, format: float }
+        feature_attributions:
+          type: object
+          additionalProperties: { type: number, format: float }
+        created_at: { type: string, format: date-time }
+        reason_codes:
+          type: array
+          items: { $ref: "#/components/schemas/ReasonCode" }
+          description: Derived from `feature_attributions` at response time — not a persisted column.
+      required: [id, decision_id, method, base_value, feature_attributions, created_at, reason_codes]
+
+    ScoreResponse:
+      type: object
+      properties:
+        decision: { $ref: "#/components/schemas/Decision" }
+        explanation:
+          type: object
+          nullable: true
+          allOf:
+            - { $ref: "#/components/schemas/Explanation" }
+      required: [decision, explanation]
+
+    Model:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, name, created_at]
+
+    ModelVersionStatus:
+      type: string
+      enum: [draft, approved, deployed, archived]
+
+    ModelVersion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        model_id: { type: string, format: uuid }
+        version: { type: string }
+        status: { $ref: "#/components/schemas/ModelVersionStatus" }
+        artifact_uri: { type: string }
+        metrics: { type: object, nullable: true }
+        created_at: { type: string, format: date-time }
+      required: [id, model_id, version, status, artifact_uri, created_at]
+
+    ModelWithVersions:
+      allOf:
+        - { $ref: "#/components/schemas/Model" }
+        - type: object
+          properties:
+            versions: { type: array, items: { $ref: "#/components/schemas/ModelVersion" } }
+          required: [versions]
+
+    RegisterModelRequest:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        artifact_uri: { type: string }
+        metrics: { type: object, nullable: true }
+        training_dataset_version_id: { type: string, format: uuid, nullable: true }
+      required: [name, version, artifact_uri]
+
+    ModelDeploymentStatus:
+      type: string
+      enum: [active, rolled_back]
+
+    ModelDeployment:
+      type: object
+      description: '`deployed_at` aliases the row''s `created_at` column — not a separate timestamp.'
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        model_version_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ModelDeploymentStatus" }
+        deployed_at: { type: string, format: date-time }
+        rolled_back_at:
+          { type: string, format: date-time, nullable: true }
+      required: [id, tenant_id, model_version_id, status, deployed_at]
+
+    Dataset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, name, created_at]
+
+    DatasetVersion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        dataset_id: { type: string, format: uuid }
+        version: { type: string }
+        uri: { type: string }
+        row_count:
+          { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+      required: [id, dataset_id, version, uri, created_at]
+
+    DatasetWithVersions:
+      allOf:
+        - { $ref: "#/components/schemas/Dataset" }
+        - type: object
+          properties:
+            versions: { type: array, items: { $ref: "#/components/schemas/DatasetVersion" } }
+          required: [versions]
+
+    RegisterDatasetRequest:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        uri: { type: string }
+        row_count: { type: integer, nullable: true }
+        schema: { type: object, nullable: true, description: "Stored but not returned in any response." }
+      required: [name, version, uri]
+
+    FairnessEvaluation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        model_version_id: { type: string, format: uuid }
+        protected_attribute: { type: string }
+        metric_name: { type: string }
+        metric_value: { type: number, format: float }
+        threshold: { type: number, format: float }
+        passed: { type: boolean }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, model_version_id, protected_attribute, metric_name, metric_value, threshold, passed, created_at]
+
+    RecordFairnessRequest:
+      type: object
+      properties:
+        model_version_id: { type: string, format: uuid }
+        metrics:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              protected_attribute: { type: string }
+              metric_name: { type: string }
+              metric_value:
+                type: number
+                format: float
+                nullable: true
+                description: "null means 'not applicable' (too few group members) -- reported in skipped_not_applicable, never persisted."
+              threshold: { type: number, format: float }
+              passed: { type: boolean }
+            required: [protected_attribute, metric_name, metric_value, threshold, passed]
+      required: [model_version_id, metrics]
+
+    ReviewCaseStatus:
+      $ref: "#/components/schemas/ReviewStatus"
+
+    ReviewCase:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        decision_id: { type: string, format: uuid }
+        assigned_to:
+          { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/ReviewCaseStatus" }
+        reason:
+          { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        resolved_at:
+          { type: string, format: date-time, nullable: true }
+      required: [id, tenant_id, decision_id, status, created_at]
+
+    ReviewCaseDecisionSummary:
+      type: object
+      description: A trimmed decision summary nested in review-listing responses — not the full Decision schema.
+      properties:
+        id: { type: string, format: uuid }
+        application_reference: { type: string }
+        score: { type: number, format: float }
+        outcome: { $ref: "#/components/schemas/DecisionOutcome" }
+        model_version_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+      required: [id, application_reference, score, outcome, model_version_id, created_at]
+
+    ReviewCaseWithDecision:
+      allOf:
+        - { $ref: "#/components/schemas/ReviewCase" }
+        - type: object
+          properties:
+            decision:
+              type: object
+              nullable: true
+              allOf:
+                - { $ref: "#/components/schemas/ReviewCaseDecisionSummary" }
+          required: [decision]
+
+    AuditEvent:
+      type: object
+      description: Does not include `payload` in this form — see `AuditEventWithPayload` for `GET /audit/export`.
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        event_type: { type: string, example: "decision.created" }
+        entity_type: { type: string, example: "decision" }
+        entity_id: { type: string, format: uuid }
+        hash: { type: string }
+        prev_hash:
+          { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, event_type, entity_type, entity_id, hash, created_at]
+
+    AuditEventWithPayload:
+      allOf:
+        - { $ref: "#/components/schemas/AuditEvent" }
+        - type: object
+          properties:
+            payload:
+              type: object
+              description: "Derived values only (e.g. score/outcome/model_version_id) -- never raw applicant features."
+          required: [payload]
+
+    AuditIntegrityCheck:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        checked_from_event_id:
+          { type: string, format: uuid, nullable: true }
+        checked_to_event_id:
+          { type: string, format: uuid, nullable: true }
+        valid: { type: boolean }
+        created_at: { type: string, format: date-time }
+      required: [id, tenant_id, valid, created_at]
+
+    VerifyChainResponse:
+      type: object
+      properties:
+        valid: { type: boolean }
+        events_checked: { type: integer }
+        first_event_id:
+          { type: string, format: uuid, nullable: true }
+        last_event_id:
+          { type: string, format: uuid, nullable: true }
+        failures:
+          type: array
+          items:
+            type: object
+            properties:
+              event_id: { type: string, format: uuid }
+              reason: { type: string }
+            required: [event_id, reason]
+            additionalProperties: true
+        integrity_check_id: { type: string, format: uuid }
+      required: [valid, events_checked, first_event_id, last_event_id, failures, integrity_check_id]
+
+    AuditExportResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEventWithPayload" }
+        meta:
+          type: object
+          description: "Export provenance -- unrelated shape to the generic 500 handler's meta (no request_id here)."
+          properties:
+            exported_by: { type: string, format: uuid }
+            exported_at: { type: string, format: date-time }
+            scope:
+              type: object
+              properties:
+                date_from: { type: string, nullable: true }
+                date_to: { type: string, nullable: true }
+              required: [date_from, date_to]
+            event_count: { type: integer }
+            export_event_id: { type: string, format: uuid }
+          required: [exported_by, exported_at, scope, event_count, export_event_id]
+      required: [events, meta]
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+      required: [id, name, slug, is_active, created_at]
+
+    MonitoringAlertSeverity:
+      type: string
+      enum: [low, medium, high, critical]
+
+    MonitoringAlertStatus:
+      type: string
+      enum: [open, acknowledged, resolved]
+
+    MonitoringAlert:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        alert_type: { type: string, example: "fairness_threshold_breach" }
+        severity: { $ref: "#/components/schemas/MonitoringAlertSeverity" }
+        message: { type: string }
+        status: { $ref: "#/components/schemas/MonitoringAlertStatus" }
+        created_at: { type: string, format: date-time }
+        resolved_at:
+          { type: string, format: date-time, nullable: true }
+      required: [id, tenant_id, alert_type, severity, message, status, created_at]
+
+    CurrentModelVersionSummary:
+      type: object
+      properties:
+        model_id: { type: string, format: uuid }
+        model_name: { type: string }
+        model_version_id: { type: string, format: uuid }
+        version: { type: string }
+      required: [model_id, model_name, model_version_id, version]
+
+    BusinessMetrics:
+      type: object
+      properties:
+        decision_count: { type: integer }
+        approved_count: { type: integer }
+        approval_rate:
+          type: number
+          format: float
+          nullable: true
+          description: "null (never 0) when decision_count is 0."
+        deployed_model_count: { type: integer }
+        current_model_version:
+          type: object
+          nullable: true
+          allOf:
+            - { $ref: "#/components/schemas/CurrentModelVersionSummary" }
+      required: [decision_count, approved_count, approval_rate, deployed_model_count, current_model_version]
+
+    HistogramSummary:
+      type: object
+      description: |
+        Computed from Prometheus histogram bucket counts. All fields are
+        `null` (never 0/absent) when there have been no observations yet.
+      properties:
+        count: { type: integer }
+        sum_seconds: { type: number, format: float }
+        avg_ms:
+          { type: number, format: float, nullable: true }
+        p50_ms:
+          { type: number, format: float, nullable: true }
+        p95_ms:
+          { type: number, format: float, nullable: true }
+      required: [count, sum_seconds, avg_ms, p50_ms, p95_ms]
+
+    ObservabilitySummary:
+      type: object
+      description: Process-level, not tenant-scoped. Same underlying Prometheus counters `GET /metrics` (outside `/api/v1`) exposes in raw exposition format.
+      properties:
+        http:
+          type: object
+          properties:
+            total_requests: { type: integer }
+            requests_by_status:
+              type: object
+              additionalProperties: { type: integer }
+              description: 'Keyed by HTTP status code as a string, e.g. "200", "404".'
+            error_rate:
+              { type: number, format: float, nullable: true }
+            unhandled_exceptions: { type: integer }
+            latency: { $ref: "#/components/schemas/HistogramSummary" }
+          required: [total_requests, requests_by_status, error_rate, unhandled_exceptions, latency]
+        scoring:
+          type: object
+          properties:
+            requests_by_outcome:
+              type: object
+              additionalProperties: { type: integer }
+            runtime_errors: { type: integer }
+            duration: { $ref: "#/components/schemas/HistogramSummary" }
+          required: [requests_by_outcome, runtime_errors, duration]
+        model_inference:
+          type: object
+          properties: { duration: { $ref: "#/components/schemas/HistogramSummary" } }
+          required: [duration]
+        explanation:
+          type: object
+          properties: { duration: { $ref: "#/components/schemas/HistogramSummary" } }
+          required: [duration]
+        database:
+          type: object
+          properties:
+            errors: { type: integer }
+            query_duration: { $ref: "#/components/schemas/HistogramSummary" }
+          required: [errors, query_duration]
+        outbox:
+          type: object
+          properties:
+            events_by_status:
+              type: object
+              additionalProperties: { type: integer }
+              description: 'Keys: "published", "retry", "failed".'
+          required: [events_by_status]
+        governance:
+          type: object
+          properties:
+            results_by_outcome:
+              type: object
+              additionalProperties: { type: integer }
+              description: 'Keys: "true", "false" (as strings).'
+          required: [results_by_outcome]
+        review_cases:
+          type: object
+          properties:
+            opened_by_reason:
+              type: object
+              additionalProperties: { type: integer }
+              description: 'Keys observed: "refer_outcome", "governance_failure".'
+          required: [opened_by_reason]
+      required: [http, scoring, model_inference, explanation, database, outbox, governance, review_cases]
