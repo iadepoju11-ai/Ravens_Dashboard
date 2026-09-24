@@ -250,6 +250,7 @@ jobs:
         run: |
           docker run --rm --network host \
             -e DATABASE_URL=postgresql://creditguard:creditguard@localhost:5432/creditguard \
+            -e SECRET_KEY=ci-only \
             creditguard-api flask db upgrade
       - name: Start the container
         run: |
