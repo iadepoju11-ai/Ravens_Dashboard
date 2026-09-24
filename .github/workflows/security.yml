@@ -115,7 +115,7 @@ jobs:
       - name: Build the ${{ matrix.name }} image
         run: docker build -t ${{ matrix.image }} ${{ matrix.context }}
       - name: Trivy scan -- fixed CRITICAL vulnerabilities (fails the build)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           image-ref: ${{ matrix.image }}
           severity: CRITICAL
@@ -123,7 +123,7 @@ jobs:
           exit-code: "1"
       - name: Trivy scan -- full HIGH/CRITICAL report (never fails the build)
         if: always()
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           image-ref: ${{ matrix.image }}
           severity: HIGH,CRITICAL
